@@ -1,0 +1,54 @@
+---
+title: "beers_law_week2"
+author: "Nicholas Baetge"
+date: "7/20/2021"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(ggpubr)
+```
+
+```{r}
+data <- read_excel("~/GITHUB/oceanoptics2021/data/beers_law.xlsx", sheet = "Summary") %>% 
+  group_by(total_vol) %>% 
+  mutate(ave = mean(log10),
+         sd = sd(log10)) %>% 
+  ungroup()
+```
+
+```{r}
+reg <- lm(ave ~ total_vol, data = data) ; summary(reg)
+```
+
+
+```{r fig.height=6, fig.width=6}
+plot <- data %>% 
+  ggplot(aes(x = total_vol, y = ave)) +
+  # geom_abline(slope = 1, intercept = 0) +
+  geom_abline(intercept = reg$coefficients["(Intercept)"],
+              slope = reg$coefficients["total_vol"],colour = "black", size = 2, linetype = 2, alpha = 0.6) + 
+  geom_errorbar(aes(ymin = ave - sd, ymax = ave + sd), width = 0.1) +
+  geom_point(shape = 21, size = 8) +
+   labs(x = "Total Volume Added (drops)", y = expression(paste("Absorbance"))) +
+   annotate( geom = "text", label = expression(atop("y = 0.06x - 0.01", paste("r"^2,"= 0.99, ", italic("p "), "<< 0.01"))), x = 6.5, y = 0, size = 8) +
+  theme_classic2(24) ; plot
+```
+
+```{r}
+library(officer)
+
+officer::read_pptx() %>%
+  # add slide ----
+  officer::add_slide() %>% 
+  # specify object and location of object 
+  officer::ph_with(plot, ph_location(width = 6, height = 6)) %>%
+  
+  # export slide 
+  base::print(
+    target = "~/GITHUB/oceanoptics2021/data/beers_law.pptx"
+    )
+```
+
