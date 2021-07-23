@@ -1,9 +1,10 @@
 ---
-title: "acs_lab3"
+title: "acs_lab4"
 author: "Nicholas Baetge"
-date: "7/21/2021"
-output: github_document
+date: "7/22/2021"
+output: html_document
 ---
+
 
 # Load Libraries
 
@@ -14,6 +15,7 @@ library(ggpubr)
 library(fs)
 library(lubridate)
 library(zoo)
+library(patchwork)
 ```
 
 
@@ -21,7 +23,7 @@ library(zoo)
 
 ```{r}
 #save filenames that are in the folder of interest
-csv_files <- fs::dir_ls("~/GITHUB/oceanoptics2021/data/acs94_lab3_721/", regexp = "\\.csv$")
+csv_files <- fs::dir_ls("~/GITHUB/oceanoptics2021/data/acs_lab4/good/", regexp = "\\.csv$")
 ```
 
 
@@ -36,33 +38,14 @@ wavelengths <- units[4] %>% strsplit(., split = " ") %>% .[[1]] %>%  str_remove(
 data <- csv_files %>% 
   map_dfr(read.csv, skip = 2, header = F, .id = "source") %>% 
   #shorten the filenames
-  mutate(source = gsub("/Users/nicholasbaetge/GITHUB/oceanoptics2021/data/", "", source),
+  mutate(source = gsub("/Users/nicholasbaetge/GITHUB/oceanoptics2021/data/acs_lab4/good/", "", source),
          source = gsub(".csv", "", source)) %>% 
   #add some distinguisihing metadata about the filenames 
-  mutate(sample = ifelse(source == "acs94_lab3_721/ACS94_20210721_175023", "a cal 1", NA),
-        sample = ifelse(source == "acs94_lab3_721/DIW_ACS94_20210721_175625", "a cal 2", sample),
-        sample = ifelse(source == "acs94_lab3_721/DIW_ACS94_20210721_180208", "c cal 1", sample),
-        sample = ifelse(source == "acs94_lab3_721/DIW_ACS94_20210721_180545", "c cal 2", sample),
-        sample = ifelse(source == "acs94_lab3_721/DIW_ACS94_20210721_180956", "c cal 3", sample),
-        
-           sample = ifelse(source ==  "acs94_lab3_721/DIW_ACS94_20210721_181513", "a filtrate", sample),
-        sample = ifelse(source ==  "acs94_lab3_721/DIW_ACS94_20210721_181649", "c filtrate", sample),
-        sample = ifelse(source ==  "acs94_lab3_721/DIW_ACS94_20210721_182207", "c whole", sample),
-        sample = ifelse(source ==  "acs94_lab3_721/DIW_ACS94_20210721_182414", "a whole", sample),
-        
-        sample = ifelse(source ==  "acs94_lab3_721/DIW_ACS94_20210721_183400", "a cal 4", sample),
-         sample = ifelse(source == 
-        "acs94_lab3_721/DIW_ACS94_20210721_183439", "unknown", sample),
-      
-         sample = ifelse(source ==  "acs94_lab3_721/DIW_ACS94_20210721_184004", "a cal 5", sample),
-        sample = ifelse(source ==  "acs94_lab3_721/DIW_ACS94_20210721_185427", "c cal 6", sample),
+  mutate(sample = ifelse(source ==  "ARD_a_2_ACS94_20210722_195827", "ard a", NA),
+        sample = ifelse(source ==  "ARD_c_2_ACS94_20210722_202755", "ard c", sample),
      
-        sample = ifelse(source ==  "acs94_lab3_721/DIW_ACS94_20210721_184637", "discrete a filtrate", sample),
-        sample = ifelse(source ==  "acs94_lab3_721/DIW_ACS94_20210721_185739", "discrete c filtrate", sample),
-        
-        
-        
-                    ) %>%
+        sample = ifelse(source ==  "DIWARD_cal_a_2_ACS94_20210722_194452", "cal a", sample),
+        sample = ifelse(source ==  "DIW_ACS94_cal_c_2_20210722_202006", "cal c", sample)) %>%
   select(source, sample, everything())
 
 #add the headers to the dataframe
@@ -142,10 +125,10 @@ c_pivot <- c_med %>%
 
 ```{r}
 cp_data <- c_pivot %>% 
-  filter(sample %in% c("discrete c filtrate", "c whole")) %>% 
-  mutate(total_c = ifelse(sample == "c whole", c, NA),
-         cdom_c = ifelse(sample == "discrete c filtrate", c, NA),
-         se_total_c = ifelse(sample == "c whole", se, NA)) %>% 
+  filter(sample %in% c("cal c", "ard c")) %>% 
+  mutate(total_c = ifelse(sample == "ard c", c, NA),
+         cdom_c = ifelse(sample == "cal c", c, NA),
+         se_total_c = ifelse(sample == "ard c", se, NA)) %>% 
   group_by(wl) %>% 
   fill(c(total_c, cdom_c, se_total_c), .direction = "updown") %>% 
   ungroup() %>% 
@@ -229,10 +212,10 @@ a_pivot <- a_med %>%
 
 ```{r}
 ap_data <- a_pivot %>% 
-  filter(sample %in% c("discrete a filtrate",  "a whole")) %>% 
-  mutate(total_a = ifelse(sample == "a whole", a, NA),
-         cdom_a = ifelse(sample == "discrete a filtrate", a, NA),
-         se_total_a = ifelse(sample == "a whole", se, NA)) %>% 
+  filter(sample %in% c("cal a",  "ard a")) %>% 
+  mutate(total_a = ifelse(sample == "ard a", a, NA),
+         cdom_a = ifelse(sample == "cal a", a, NA),
+         se_total_a = ifelse(sample == "cal a", se, NA)) %>% 
   group_by(wl) %>% 
   fill(c(total_a, cdom_a, se_total_a), .direction = "updown") %>% 
   ungroup() %>% 
@@ -262,7 +245,7 @@ ap_data %>%
 ```{r}
 combined <- bind_cols(ap_data, cp_data %>% select(-c(source, sample, wl))) %>% 
   mutate(b = cp - ap) %>% 
-  filter(sample == "a whole")
+  filter(sample == "ard a")
 ```
 
 
@@ -342,20 +325,73 @@ corrected <- to_correct %>%
 ```
 
 
-### plot
+### plots
 
 ```{r}
-corrected %>%
-  ggplot(aes(x = psi_wl, y = ap)) +
+a_plot <- corrected %>%
+  ggplot(aes(x = psi_wl, y = ap_corr)) +
   # geom_errorbar(aes(ymin = ap - se, ymax = ap + se), size = 2, width = 1) +
-  geom_line() +
-  geom_line(aes(y = ap_corr), color = "blue") +
-  # geom_errorbar(aes(ymin = total_a - se, ymax = total_a + se), size = 2, width = 0.5, color = "blue") +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = ap_corr - se_total_a, ymax = ap_corr - se_total_a), size = 6, width = 0.5) +
   scale_y_continuous(expand = c(0,0)) +
-  labs(x = "wavelength") +
+  ylim(c(0, 4)) +
+  labs(x = "Wavelength", y = expression(paste("a, m"^-1))) +
   theme_classic2(20)
   
 ```
+
+```{r}
+a_plot2 <- corrected %>%
+  ggplot(aes(x = psi_wl, y = ap_corr)) +
+  # geom_errorbar(aes(ymin = ap - se, ymax = ap + se), size = 2, width = 1) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = ap_corr - se_total_a, ymax = ap_corr - se_total_a), size = 6, width = 0.5) +
+  scale_y_continuous(expand = c(0,0)) +
+  labs(x = "Wavelength", y = expression(paste("a, m"^-1))) +
+  theme_classic2(20)
+  
+```
+
+```{r}
+b_plot <- corrected %>%
+  ggplot(aes(x = psi_wl, y = b)) +
+  geom_line(size = 1) +
+  scale_y_continuous(expand = c(0,0)) +
+  ylim(c(0, 4)) +
+  labs(x = "Wavelength", y = expression(paste("b, m"^-1))) +
+  theme_classic2(20)
+  
+```
+
+
+```{r}
+c_plot <- corrected %>%
+  ggplot(aes(x = psi_wl, y = cp_corr)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = cp_corr - se_total_c, ymax = cp_corr - se_total_c), size = 6, width = 0.5) +
+  scale_y_continuous(expand = c(0,0)) +
+  ylim(c(0, 4)) +
+  labs(x = "Wavelength", y = expression(paste("c, m"^-1))) +
+  theme_classic2(20)
+  
+```
+
+
+```{r fig.height=3, fig.width=8}
+
+(a_plot + inset_element(a_plot2, left = 0.3, bottom = 0.4, right = 1, top = 1, align_to = 'full') ) +
+  
+  b_plot + c_plot
+```
+
+
+
+
+
+
+
+
+
 
 
 
