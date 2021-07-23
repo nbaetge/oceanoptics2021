@@ -306,11 +306,12 @@ ap_data %>%
   rename(se = se_total_a) %>% 
   select(wl, total_a, ap, se) %>% 
   ggplot(aes(x = wl, y = ap)) +
-  geom_errorbar(aes(ymin = ap - se, ymax = ap + se), size = 2, width = 1) +
-  geom_line() +
-  geom_line(aes(y = total_a), color = "blue") +
-  geom_errorbar(aes(ymin = total_a - se, ymax = total_a + se), size = 2, width = 0.5, color = "blue") +
-  labs(x = "wavelength") +
+  geom_errorbar(aes(ymin = ap - se, ymax = ap + se)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = total_a - se, ymax = total_a + se),  color = "blue") +
+  geom_line(aes(y = total_a), size = 1, color = "blue") +
+  labs(x = "wavelength", y = expression(paste("a, m"^-1))) +
+  scale_y_continuous(expand = c(0,0)) +
   theme_classic2(20)
 ```
 
