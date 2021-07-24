@@ -65,6 +65,14 @@ library(patchwork)
 
     ## Warning: package 'patchwork' was built under R version 4.0.2
 
+``` r
+library(viridis)
+```
+
+    ## Warning: package 'viridis' was built under R version 4.0.2
+
+    ## Loading required package: viridisLite
+
 # Import Data
 
 ``` r
@@ -302,16 +310,22 @@ ap_data <- a_pivot %>%
 ## plot
 
 ``` r
-ap_data %>%
+ap_data.plot <- ap_data %>%
+  filter(sample == "ard a") %>% 
   rename(se = se_total_a) %>% 
-  select(wl, total_a, ap, se) %>% 
-  ggplot(aes(x = wl, y = ap)) +
-  geom_errorbar(aes(ymin = ap - se, ymax = ap + se)) +
+  select(wl, sample, total_a, ap, se) 
+
+
+ap_data.plot %>% 
+  select(wl, total_a, se) %>% 
+  mutate(type = "a") %>% 
+  bind_rows(ap_data.plot %>% select(wl, ap, se) %>% mutate(type = "ap")) %>% 
+  mutate(values = total_a,
+         values = ifelse(is.na(values), ap, total_a)) %>% 
+  ggplot(aes(x = wl, y = values, color = type)) +
   geom_line(size = 1) +
-  geom_errorbar(aes(ymin = total_a - se, ymax = total_a + se),  color = "blue") +
-  geom_line(aes(y = total_a), size = 1, color = "blue") +
-  labs(x = "wavelength", y = expression(paste("a, m"^-1))) +
-  scale_y_continuous(expand = c(0,0)) +
+  labs(x = "Wavelength", y = expression(paste("m"^-1)), color = "") +
+  scale_color_viridis_d(end = 0.7, labels =  c(expression(a), expression(a[p]))) +
   theme_classic2(20)
 ```
 
@@ -407,14 +421,41 @@ corrected <- to_correct %>%
 ### plots
 
 ``` r
-a_plot <- corrected %>%
-  ggplot(aes(x = psi_wl, y = ap_corr)) +
-  # geom_errorbar(aes(ymin = ap - se, ymax = ap + se), size = 2, width = 1) +
+plot.data <- corrected %>%
+  select(psi_wl, ap_corr, se_total_a, b, cp_corr, se_total_c) %>% 
+  rename(wl = psi_wl,
+         ap = ap_corr,
+         se_ap = se_total_a,
+         cp = cp_corr,
+         se_cp = se_total_c)
+
+
+melt.plot.data <- plot.data %>% 
+  select(wl, ap, se_ap) %>% 
+  mutate(type = "a") %>% 
+  bind_rows(plot.data %>%  
+              select(wl, cp, se_cp) %>% 
+              mutate(type = "c")) %>% 
+  bind_rows(plot.data %>%  
+              select(wl, b) %>% 
+              mutate(type = "b")) %>% 
+  mutate(value = ifelse(type == "a", ap, NA),
+         value = ifelse(type == "b", b, value),
+         value = ifelse(type == "c", cp, value),
+         se = ifelse(type == "a", se_ap, NA),
+         se = ifelse(type == "c",se_cp, se)) %>% 
+  select(type, wl, value, se)
+```
+
+``` r
+ plot <- melt.plot.data %>% 
+  ggplot(aes(x = wl, y = value, color = type)) +
+  geom_errorbar(aes(ymin = value - se, ymax = value + se), size = 2, width = 1) +
   geom_line(size = 1) +
-  geom_errorbar(aes(ymin = ap_corr - se_total_a, ymax = ap_corr - se_total_a), size = 6, width = 0.5) +
   scale_y_continuous(expand = c(0,0)) +
-  ylim(c(0, 4)) +
-  labs(x = "Wavelength", y = expression(paste("a, m"^-1))) +
+  ylim(c(0, 6)) +
+  labs(x = "Wavelength", y = expression(paste("m"^-1)), color = "") +
+  scale_color_viridis_d(end = 0.9, labels =  c(expression(a[p]), expression(b[p]), expression(c[p]))) +
   theme_classic2(20)
 ```
 
@@ -422,53 +463,24 @@ a_plot <- corrected %>%
     ## replace the existing scale.
 
 ``` r
-a_plot2 <- corrected %>%
-  ggplot(aes(x = psi_wl, y = ap_corr)) +
-  # geom_errorbar(aes(ymin = ap - se, ymax = ap + se), size = 2, width = 1) +
+inset_plot <- melt.plot.data %>% 
+  filter(type == "a") %>% 
+  ggplot(aes(x = wl, y = value, color = type)) +
+  geom_errorbar(aes(ymin = value - se, ymax = value + se), size = 2, width = 1) +
   geom_line(size = 1) +
-  geom_errorbar(aes(ymin = ap_corr - se_total_a, ymax = ap_corr - se_total_a), size = 6, width = 0.5) +
   scale_y_continuous(expand = c(0,0)) +
-  labs(x = "Wavelength", y = expression(paste("a, m"^-1))) +
+  labs(x = "Wavelength", y = expression(paste("m"^-1))) +
+  guides(color = F) +
+  scale_color_viridis_d(end = 0.9) +
   theme_classic2(20)
 ```
 
 ``` r
-b_plot <- corrected %>%
-  ggplot(aes(x = psi_wl, y = b)) +
-  geom_line(size = 1) +
-  scale_y_continuous(expand = c(0,0)) +
-  ylim(c(0, 4)) +
-  labs(x = "Wavelength", y = expression(paste("b, m"^-1))) +
-  theme_classic2(20)
+plot + inset_element(inset_plot, 0.4, 0.6, 1, 1) 
 ```
 
-    ## Scale for 'y' is already present. Adding another scale for 'y', which will
-    ## replace the existing scale.
-
-``` r
-c_plot <- corrected %>%
-  ggplot(aes(x = psi_wl, y = cp_corr)) +
-  geom_line(size = 1) +
-  geom_errorbar(aes(ymin = cp_corr - se_total_c, ymax = cp_corr - se_total_c), size = 6, width = 0.5) +
-  scale_y_continuous(expand = c(0,0)) +
-  ylim(c(0, 4)) +
-  labs(x = "Wavelength", y = expression(paste("c, m"^-1))) +
-  theme_classic2(20)
-```
-
-    ## Scale for 'y' is already present. Adding another scale for 'y', which will
-    ## replace the existing scale.
-
-``` r
-(a_plot + inset_element(a_plot2, left = 0.3, bottom = 0.4, right = 1, top = 1, align_to = 'full') ) +
-  
-  b_plot + c_plot
-```
-
-    ## Warning: Removed 12 row(s) containing missing values (geom_path).
+    ## Warning: Removed 13 row(s) containing missing values (geom_path).
 
     ## Warning: Removed 1 row(s) containing missing values (geom_path).
-    
-    ## Warning: Removed 1 row(s) containing missing values (geom_path).
 
-![](acs_lab4_files/figure-gfm/unnamed-chunk-24-1.png)<!-- -->
+![](acs_lab4_files/figure-gfm/unnamed-chunk-23-1.png)<!-- -->
