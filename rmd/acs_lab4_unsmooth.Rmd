@@ -1,0 +1,422 @@
+---
+title: "acs_lab5"
+author: "Nicholas Baetge"
+date: "7/26/2021"
+output: github_document
+---
+
+# Load Libraries
+
+```{r setup}
+library(tidyverse)
+library(readxl)
+library(ggpubr)
+library(fs)
+library(lubridate)
+library(zoo)
+library(patchwork)
+library(viridis)
+```
+
+
+# Import Data
+
+```{r}
+#save filenames that are in the folder of interest
+csv_files <- fs::dir_ls("~/GITHUB/oceanoptics2021/data/acs_lab4/good/", regexp = "\\.csv$")
+```
+
+
+```{r}
+#the first two rows of the acs data output contain header and unit data. we'll store those separately...units first and we'll circle back to headers
+units <- colnames(read_csv(csv_files[1], skip = 1))
+
+#extract the wavelengths from the "a" column and store as a vector (these are also the same for c)
+wavelengths <- units[4] %>% strsplit(., split = " ") %>% .[[1]] %>%  str_remove(., "1/m	lambda=") 
+   
+#store all data from all files one data frame (this is what the map_dfr function does). We'll add the filenames to the dataframe as well, in a column called "source. 
+data <- csv_files %>% 
+  map_dfr(read.csv, skip = 2, header = F, .id = "source") %>% 
+  #shorten the filenames
+  mutate(source = gsub("/Users/nicholasbaetge/GITHUB/oceanoptics2021/data/acs_lab4/good/", "", source),
+         source = gsub(".csv", "", source)) %>% 
+  #add some distinguisihing metadata about the filenames 
+  mutate(sample = ifelse(source ==  "ARD_a_2_ACS94_20210722_195827", "ard a", NA),
+        sample = ifelse(source ==  "ARD_c_2_ACS94_20210722_202755", "ard c", sample),
+     
+        sample = ifelse(source ==  "DIWARD_cal_a_2_ACS94_20210722_194452", "cal a", sample),
+        sample = ifelse(source ==  "DIW_ACS94_cal_c_2_20210722_202006", "cal c", sample)) %>%
+  select(source, sample, everything())
+
+#add the headers to the dataframe
+headers <- c("source", "sample", colnames(read_csv(csv_files[1])))
+colnames(data) <-  headers
+
+```
+
+
+# c
+
+follows process as for a
+
+```{r}
+c <- data %>% 
+  select(c) %>% 
+  mutate(c = str_squish(c)) %>% 
+  #remove the brackets
+  mutate(c = str_replace_all(c, "\\[|\\]", "")) %>%
+  mutate(c = str_squish(c)) %>% 
+  separate(c, sep = " ", into = wavelengths) %>% 
+  mutate_all(as.numeric)
+  
+```
+
+```{r}
+c_data <- bind_cols(data, c) %>% 
+  select(-c, -a) %>% 
+  mutate(time = ymd_hms(time)) %>% 
+  group_by(source) %>% 
+   mutate(interv = interval(first(time), time),
+         s = as.numeric(interv),
+         min = s/60) %>% 
+  select(source:time, interv:min, everything()) %>% 
+  ungroup() 
+
+```
+
+## medians and se
+
+```{r}
+c_med <- c_data %>% 
+  select(source:sample, c(11:91)) %>% 
+  group_by(source) %>% 
+  mutate_at(c(3:83), list(med = median)) %>% 
+  ungroup() %>% 
+  select(source:sample, contains("med")) %>% 
+  distinct() %>% 
+  rename_at(.vars = vars(ends_with("_med")),
+            .funs = funs(sub("_med", "", .)))
+```
+
+
+```{r}
+c_se <- c_data %>% 
+  select(source:sample, c(11:91)) %>% 
+  group_by(source) %>% 
+  mutate_at(c(3:83), list(se = function(x) sd(x) / sqrt(length(x)))) %>% 
+  ungroup() %>% 
+  select(source:sample, contains("se")) %>% 
+  distinct() %>% 
+  rename_at(.vars = vars(ends_with("_se")),
+            .funs = funs(sub("_se", "", .)))
+
+c_pivot <- c_med %>% 
+  pivot_longer(c(3:83), names_to = "wl", values_to = "c" ) %>%
+  mutate_at(vars(c), as.numeric) %>% 
+  bind_cols(., 
+            c_se %>% 
+  pivot_longer(c(3:83), names_to = "wl", values_to = "se" ) %>%
+  mutate_at(vars(se), as.numeric) %>% select(-source, -sample, -wl)) %>% 
+  mutate_at(vars(wl), as.numeric)
+
+```
+
+## derive cp
+
+```{r}
+cp_data <- c_pivot %>% 
+  filter(sample %in% c("cal c", "ard c")) %>% 
+  mutate(total_c = ifelse(sample == "ard c", c, NA),
+         cdom_c = ifelse(sample == "cal c", c, NA),
+         se_total_c = ifelse(sample == "ard c", se, NA)) %>% 
+  group_by(wl) %>% 
+  fill(c(total_c, cdom_c, se_total_c), .direction = "updown") %>% 
+  ungroup() %>% 
+  select(source, sample, wl, total_c, cdom_c, se_total_c) %>% 
+  mutate(cp = total_c - cdom_c)
+  
+```
+
+
+# a
+
+
+```{r}
+#extract the a-tube data and separate out the data
+a <- data %>% 
+  select(a) %>% 
+  #there are sometimes one, two, or three spaces between the data. str_squish helps us deal with that
+  mutate(a = str_squish(a)) %>% 
+  #remove the brackets
+  mutate(a = str_replace_all(a, "\\[|\\]", "")) %>%
+  mutate(a = str_squish(a)) %>% 
+  separate(a, sep = " ", into = wavelengths) %>% 
+  mutate_all(as.numeric)
+  
+```
+
+
+```{r}
+#combine a data with metadata and change data classes
+a_data <- bind_cols(data, a) %>% 
+  select(-c, -a) %>% 
+  mutate(time = ymd_hms(time)) %>% 
+  group_by(source) %>% 
+   mutate(interv = interval(first(time), time),
+         s = as.numeric(interv),
+         min = s/60) %>% 
+  select(source:time, interv:min, everything()) %>% 
+  ungroup() 
+```
+
+## medians and se
+
+```{r}
+#calculate medians for each wavelength
+a_med <- a_data %>% 
+  select(source:sample, c(11:91)) %>% 
+  group_by(source) %>% 
+  mutate_at(c(3:83), list(med = median)) %>% 
+  ungroup() %>% 
+  select(source:sample, contains("med")) %>% 
+  distinct() %>% 
+  rename_at(.vars = vars(ends_with("_med")),
+            .funs = funs(sub("_med", "", .)))
+```
+
+```{r}
+#calculate se
+a_se <- a_data %>% 
+  select(source:sample, c(11:91)) %>% 
+  group_by(source) %>% 
+  mutate_at(c(3:83), list(se = function(x) sd(x) / sqrt(length(x)))) %>% 
+  ungroup() %>% 
+  select(source:sample, contains("se")) %>% 
+  distinct() %>% 
+  rename_at(.vars = vars(ends_with("_se")),
+            .funs = funs(sub("_se", "", .)))
+
+#combine median and se data and melt for plotting
+a_pivot <- a_med %>% 
+  pivot_longer(c(3:83), names_to = "wl", values_to = "a" ) %>%
+  mutate_at(vars(a), as.numeric) %>% 
+  bind_cols(., 
+            a_se %>% 
+  pivot_longer(c(3:83), names_to = "wl", values_to = "se" ) %>%
+  mutate_at(vars(se), as.numeric) %>% select(-source, -sample, -wl)) %>% 
+  mutate_at(vars(wl), as.numeric)
+
+```
+ 
+## derive ap 
+
+```{r}
+ap_data <- a_pivot %>% 
+  filter(sample %in% c("cal a",  "ard a")) %>% 
+  mutate(total_a = ifelse(sample == "ard a", a, NA),
+         cdom_a = ifelse(sample == "cal a", a, NA),
+         se_total_a = ifelse(sample == "cal a", se, NA)) %>% 
+  group_by(wl) %>% 
+  fill(c(total_a, cdom_a, se_total_a), .direction = "updown") %>% 
+  ungroup() %>% 
+  select(source, sample, wl, total_a, cdom_a, se_total_a) %>% 
+  mutate(ap = total_a - cdom_a) 
+  
+```
+
+## plot
+
+```{r}
+ap_data.plot <- ap_data %>%
+  filter(sample == "ard a") %>% 
+  rename(se = se_total_a) %>% 
+  select(wl, sample, total_a, ap, se) 
+
+
+ap_data.plot %>% 
+  select(wl, total_a, se) %>% 
+  mutate(type = "a") %>% 
+  bind_rows(ap_data.plot %>% select(wl, ap, se) %>% mutate(type = "ap")) %>% 
+  mutate(values = total_a,
+         values = ifelse(is.na(values), ap, total_a)) %>% 
+  ggplot(aes(x = wl, y = values, color = type)) +
+  geom_line(size = 1) +
+  labs(x = "Wavelength", y = expression(paste("m"^-1)), color = "") +
+  scale_color_viridis_d(end = 0.7, labels =  c(expression(a), expression(a[p]))) +
+  theme_classic2(20)
+  
+```
+
+# combine ap and cp data
+
+```{r}
+combined <- bind_cols(ap_data, cp_data %>% select(-c(source, sample, wl))) %>% 
+  mutate(b = cp - ap) %>% 
+  filter(sample == "ard a")
+```
+
+
+## correct for temperature and scattering
+
+### sullivan et al 2006 values
+
+```{r}
+#sullivan et al 2006 values
+
+psi_wl <-  c(400,402,404,406,408,410,412,414,416,418,420,422,424,426,428,430,432,434,436,438,440,442,444,446,448,450,452,454,456,458,460,462,464,466,468,470,472,474,476,478,480,482,484,486,488,490,492,494,496,498,500,502,504,506,508,510,512,514,516,518,520,522,524,526,528,530,532,534,536,538,540,542,544,546,548,550,552,554,556,558,560,562,564,566,568,570,572,574,576,578,580,582,584,586,588,590,592,594,596,598,600,602,604,606,608,610,612,614,616,618,620,622,624,626,628,630,632,634,636,638,640,642,644,646,648,650,652,654,656,658,660,662,664,666,668,670,672,674,676,678,680,682,684,686,688,690,692,694,696,698,700,702,704,706,708,710,712,714,716,718,720,722,724,726,728,730,732,734,736,738,740,742,744,746,748,750)
+
+psiT <-  c(0.0001,0.0001,0.0001,0.0001,0,0,0,0.0001,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.0001,0.0001,0.0001,0.0001,0.0001,0.0001,0.0001,0.0001,0.0001,0.0001,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.0001,0.0001,0.0001,0.0002,0.0003,0.0003,0.0004,0.0005,0.0006,0.0006,0.0007,0.0008,0.0009,0.001,0.001,0.001,0.001,0.001,0.0009,0.0009,0.0008,0.0007,0.0006,0.0006,0.0005,0.0004,0.0003,0.0003,0.0002,0.0001,0.0001,0,0,0,0,0,0,0,0,0,0.0001,0.0001,0.0001,0.0002,0.0002,0.0002,0.0001,0.0001,0.0001,0,0,-0.0001,-0.0001,-0.0001,-0.0001,-0.0001,-0.0001,0,0,0.0001,0.0002,0.0003,0.0005,0.0007,0.0009,0.0013,0.0017,0.0021,0.0026,0.0032,0.0038,0.0045,0.0054,0.0063,0.0073,0.0083,0.0094,0.0104,0.0113,0.0121,0.0128,0.0133,0.0136,0.0136,0.0133,0.0129,0.0124,0.0116,0.0107)
+
+wl <- as.numeric(wavelengths) %>% 
+  data_frame(.) %>% 
+  rename(psi_wl = ".") %>% 
+  mutate(psiT = NA) 
+
+temp <- data_frame(psi_wl, psiT) %>% 
+  bind_rows(., wl) %>% 
+  arrange(psi_wl) %>% 
+  distinct(., psi_wl, .keep_all = T) %>% 
+  zoo(., order.by = .$psi_wl) 
+  
+psiT_interp <-  as.numeric(na.approx(temp$psiT, na.rm = F)) 
+psi_wl_interp  <- temp$psi_wl
+interpolated_temp <- data.frame(psi_wl_interp, psiT_interp) %>% 
+  rownames_to_column() %>% 
+  rename(psi_wl = psi_wl_interp) %>% 
+  select(-rowname) %>% left_join(wl %>% select(psi_wl), .) %>% 
+  drop_na()
+  
+```
+
+```{r}
+to_correct <- combined %>%
+  rename(psi_wl = wl) %>% 
+  left_join(., interpolated_temp) 
+```
+
+
+
+```{r}
+# Find Near Infrared & references
+iNIR <- to_correct %>%  filter(between(psi_wl, 710, 750))  # spectral srange for optimization (710 to 750nm)
+
+#Find nearest wavelength to greater than 715 nm to use as reference for correction
+iref <- iNIR %>% filter(abs(psi_wl - 715) == min(abs(psi_wl - 715)))
+  
+```
+
+
+####cost function to find deltaT
+
+```{r}
+deltaT = 0
+
+cost_function <- function(iNIR, iref, deltaT) { sum(abs(iNIR$ap - iNIR$psiT_interp * deltaT - ((iref$ap - iref$psiT_interp * deltaT) / iref$b * iNIR$b))) }
+
+optimize <- optim(fn = cost_function, iNIR = iNIR, iref = iref, par = deltaT, lower = 0, upper = 20000, method = "Brent") 
+
+deltaT <- optimize$value
+
+```
+
+
+```{r}
+corrected <- to_correct %>% 
+  mutate(deltaT = deltaT,
+         iref_ap = iref$ap,
+         iref_psiT = iref$psiT_interp,
+         iref_b = iref$b,
+         
+         ap_corr = ap - psiT_interp * deltaT - (iref_ap - iref_psiT * deltaT) / iref_b * b, 
+         cp_corr = cp - psiT_interp * deltaT)
+```
+
+
+### plots
+
+```{r}
+plot.data <- corrected %>%
+  select(psi_wl, ap_corr, se_total_a, b, cp_corr, se_total_c) %>% 
+  rename(wl = psi_wl,
+         ap = ap_corr,
+         se_ap = se_total_a,
+         cp = cp_corr,
+         se_cp = se_total_c)
+
+
+melt.plot.data <- plot.data %>% 
+  select(wl, ap, se_ap) %>% 
+  mutate(type = "a") %>% 
+  bind_rows(plot.data %>%  
+              select(wl, cp, se_cp) %>% 
+              mutate(type = "c")) %>% 
+  bind_rows(plot.data %>%  
+              select(wl, b) %>% 
+              mutate(type = "b")) %>% 
+  mutate(value = ifelse(type == "a", ap, NA),
+         value = ifelse(type == "b", b, value),
+         value = ifelse(type == "c", cp, value),
+         se = ifelse(type == "a", se_ap, NA),
+         se = ifelse(type == "c",se_cp, se)) %>% 
+  select(type, wl, value, se)
+```
+
+
+```{r}
+ plot <- melt.plot.data %>% 
+  ggplot(aes(x = wl, y = value, color = type)) +
+  geom_errorbar(aes(ymin = value - se, ymax = value + se), size = 2, width = 1) +
+  geom_line(size = 1) +
+  scale_y_continuous(expand = c(0,0)) +
+  ylim(c(0, 6)) +
+  labs(x = "Wavelength", y = expression(paste("m"^-1)), color = "") +
+  scale_color_viridis_d(end = 0.9, labels =  c(expression(a[p]), expression(b[p]), expression(c[p]))) +
+  theme_classic2(20)
+  
+```
+
+```{r}
+inset_plot <- melt.plot.data %>% 
+  filter(type == "a") %>% 
+  ggplot(aes(x = wl, y = value, color = type)) +
+  geom_errorbar(aes(ymin = value - se, ymax = value + se), size = 2, width = 1) +
+  geom_line(size = 1) +
+  scale_y_continuous(expand = c(0,0)) +
+  labs(x = "Wavelength", y = expression(paste("m"^-1))) +
+  guides(color = F) +
+  scale_color_viridis_d(end = 0.9) +
+  theme_classic2(20)
+  
+```
+
+
+
+
+```{r fig.height=7, fig.width=8}
+
+plot + inset_element(inset_plot, 0.4, 0.6, 1, 1) 
+```
+
+```{r}
+saveRDS(combined, file = "~/GITHUB/oceanoptics2021/data/acs_lab4/processed_acs_lab4.rds")
+```
+
+# Unsmooth
+
+Unsmoothing method from spectral decomposition in:
+Chase, A., et al., Decomposition of in situ particulate absorption spectra. [Methods in Oceanography (2014)](http://dx.doi.org/10.1016/j.mio.2014.02.022)
+
+```{r}
+unnsmooth <- combined
+```
+
+
+
+
+
+
+
+
+
+
+

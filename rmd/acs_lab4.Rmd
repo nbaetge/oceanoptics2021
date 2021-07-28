@@ -398,7 +398,9 @@ inset_plot <- melt.plot.data %>%
 plot + inset_element(inset_plot, 0.4, 0.6, 1, 1) 
 ```
 
-
+```{r}
+saveRDS(combined, file = "~/GITHUB/oceanoptics2021/data/acs_lab4/processed_acs_lab4.rds")
+```
 
 
 

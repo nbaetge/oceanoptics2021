@@ -1,0 +1,47 @@
+---
+title: "lmodel2"
+author: "Nicholas Baetge"
+date: "7/25/2021"
+output: html_document
+---
+
+```{r}
+library(lmodel2)
+library(ggpubr)
+library(tidyverse)
+```
+
+
+## BCD v NPP
+
+```{r Model 2 regression, echo = FALSE}
+reg <- lmodel2(int.bcd_global ~ int.NPP, data = bcd.data, nperm = 99)
+
+
+```
+
+
+## Plots
+
+```{r BCD and NPP regression plots, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 6, fig.width = 8}
+reg.plot <- bcd.data %>% 
+  ggplot(aes(x = int.NPP, y = int.bcd_global)) + 
+  geom_abline(intercept = reg1$regression.results[3,2],
+              slope = reg1$regression.results[3,3],colour = "black", linetype = 2, size = 1) +
+   geom_abline(intercept = reg1$confidence.intervals[3,2],
+              slope = reg1$confidence.intervals[3,4],colour = "grey", linetype = 3, size = 1) +
+  geom_abline(intercept = reg1$confidence.intervals[3,3],
+              slope = reg1$confidence.intervals[3,5],colour = "grey", linetype = 3, size = 1) +
+  geom_point( aes(fill = factor(Season, levels = levels)), shape = 21, color = "black", size = 4, alpha = 0.7) +
+  labs(x =  expression(paste("NPP, µmol C L"^-1, " d"^-1)), y = expression(paste("BCD, µmol C L"^-1, " d"^-1))) +
+  scale_fill_manual(values = custom.colors) +
+  scale_color_manual(values = custom.colors) +
+  theme_classic2(base_size = 16) +
+  theme(legend.title = element_blank()) +
+  guides(color = F) +
+  annotate( geom = "text", label = expression(atop("y = 0.19x + 0.03", paste("r"^2," = 0.68, ", italic("p "), "<< 0.01"))), x = 2.7, y = 0.08, size = 6) 
+  
+
+reg.plot
+
+```
