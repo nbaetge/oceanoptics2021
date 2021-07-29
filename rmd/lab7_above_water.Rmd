@@ -83,6 +83,20 @@ combined <- bind_rows(light_data, dark_data) %>%
   mutate(which = "Lu")
 ```
 
+```{r}
+l_plot <- combined %>% 
+  filter(wl < 850) %>% 
+  mutate(source = ifelse(source == "cal", "Reference", source)) %>% 
+  ggplot(aes(x = wl, y = diff, color = source)) +
+  # geom_errorbar(aes(ymin = ave - sd, ymax = ave + sd), size = 0.5, width = 1) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9) +
+  labs(x = "Wavelength", y = expression(paste("L, µW cm"^-2, "nm sr"^-1)), color = "") +
+  theme_classic2(20)
+```
+
+
+
 # Es
 
 ```{r}
@@ -145,6 +159,18 @@ es_combined <- bind_rows(es_light_data, es_dark_data) %>%
   mutate(which = "ES")
 ```
 
+```{r}
+e_plot <- es_combined %>% 
+  filter(wl < 850) %>% 
+  mutate(source = ifelse(source == "cal", "Reference", source)) %>% 
+  ggplot(aes(x = wl, y = diff, color = source)) +
+  # geom_errorbar(aes(ymin = ave - sd, ymax = ave + sd), size = 0.5, width = 1) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9) +
+  labs(x = "Wavelength", y = expression(paste("E, µW cm"^-2, "nm")), color = "") +
+  theme_classic2(20)
+```
+
 # Interpolate
 
 ```{r}
@@ -168,9 +194,9 @@ interp <- combined %>%
   drop_na(es) %>% 
   distinct() %>% 
   
-  filter(source %in% c("LSky", "LT", "LSky_2", "LT_2")) %>% 
+  # filter(source %in% c("LSky", "LT", "LSky_2", "LT_2")) %>%
   group_by(wl) %>% 
-  mutate(mean_es = mean(es)) %>% 
+  mutate(mean_es = ifelse(!source == "cal", mean(es), NA)) %>% 
   ungroup() %>% 
   
   select(source, wl, lu, mean_es) %>% 
@@ -182,15 +208,52 @@ interp <- combined %>%
     
   fill(c(Lg, Lt), .direction = "updown")  %>% 
   ungroup() %>% 
-  mutate(rrs = (Lt - Lg)/mean_es) %>% 
+  mutate(cal_es = ifelse(source == "cal", (lu * pi / 0.99), NA),
+         rrs = (Lt - Lg)/mean_es) %>% 
   # filter(source %in% c("LT", "LT_2")) %>% 
   group_by(wl) %>% 
-  mutate(ave = mean(rrs),
-         sd = sd(rrs))
+  fill(cal_es, .direction = "updown") %>% 
+  mutate(ave = mean(rrs, na.rm = T),
+         sd = sd(rrs, na.rm = T)) %>% 
+  ungroup() %>% 
+  filter(!source == "cal") %>% 
+  mutate(cal_rrs = (Lt - Lg)/cal_es) %>% 
+  group_by(wl) %>% 
+  mutate(ave_cal = mean(cal_rrs),
+         sd_cal = sd(cal_rrs)) %>% 
+  ungroup()
   
 
 
 ```
+
+```{r}
+l_curve <- interp %>% 
+  select(source, wl, Lg, Lt) %>% 
+  mutate(Lw = Lt - Lg) %>% 
+  distinct() %>% 
+  filter(source %in% c("LT", "LT_2")) %>% 
+  mutate(source = ifelse(source == "LT", "1", "2")) %>% 
+  pivot_longer(cols = c(Lg, Lt, Lw), names_to = "l", values_to = "value") %>% 
+  ggplot(aes(x = wl, y = value, color = l, group = interaction(source, l))) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9 ) +
+  labs(x = "Wavelength", y = expression(paste("L, µW cm"^-2, "nm sr"^-1)), color = "") +
+  theme_classic2(20)
+```
+
+```{r}
+es_curve <- interp %>% 
+  select(wl, mean_es, cal_es) %>% 
+  distinct() %>% 
+  pivot_longer(cols = c(mean_es, cal_es), names_to = "type", values_to = "value") %>% 
+  ggplot(aes(x = wl, y = value, color = type)) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9, labels =  c(expression(paste("Sensor E"[s])), expression(paste("Plate-derived E"[s])) ) ) +
+  labs(x = "Wavelength", y = expression(paste("E, µW cm"^-2, "nm")), color = "") +
+  theme_classic2(20)
+```
+
 
 ```{r}
 interp %>% 
@@ -265,6 +328,8 @@ all_phone <- tibble(phone_wl, group_vals, groups) %>%
          wl = phone_wl) 
 
 ```
+
+
 ```{r}
 all %>% 
   rename(ave = ave_rrs,
@@ -277,3 +342,64 @@ all %>%
   theme_classic2(20) + 
   guides(fill = F)
 ```
+
+
+
+```{r}
+library(lmodel2)
+```
+
+
+```{r}
+reg <- lmodel2(ave ~ ave_cal, data = interp, nperm = 99)
+
+
+```
+
+
+## Plots
+
+```{r}
+plate_spec <-  interp %>% 
+  select(wl, ave, ave_cal) %>% 
+  distinct() %>% 
+  pivot_longer(cols = c(ave, ave_cal), names_to = "type", values_to = "value") %>% 
+  ggplot(aes(x = wl, y = value, color = type)) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9, labels =  c(expression(paste("Sensor E"[s])), expression(paste("Plate-derived E"[s])) ) ) +
+  labs(x = "Wavelength", y = expression(paste("Rrs, sr"^-1)), color = "") +
+  theme_classic2(20)
+```
+
+
+
+```{r echo=FALSE, fig.height=8, fig.width=6, message=FALSE, warning=FALSE}
+plate_compare <- interp %>% 
+  ggplot(aes(x = ave_cal, y = ave)) + 
+  geom_point(aes(fill = wl), shape = 21, color = "black", size = 4, alpha = 0.7) +
+   geom_abline(intercept = reg$regression.results[3,2],
+              slope = reg$regression.results[3,3],colour = "black", linetype = 2, size = 1) +
+   geom_abline(intercept = reg$confidence.intervals[3,2],
+              slope = reg$confidence.intervals[3,4],colour = "grey", linetype = 3, size = 1) +
+  geom_abline(intercept = reg$confidence.intervals[3,3],
+              slope = reg$confidence.intervals[3,5],colour = "grey", linetype = 3, size = 1) +
+  geom_abline(intercept = 0, slope = 1, size = 1, color = "red") +
+  labs(x =  expression(paste("Rrs, sr"^-1," (Plate-derived E"[s],")")), y = expression(paste("Rrs, sr"^-1)), fill = "Wavelength") +
+  scale_fill_viridis_c() +
+  theme_classic2(base_size = 21) +
+  guides(fill = guide_colourbar(barheight = 10, barwidth = 2, frame.colour = "black", frame.linewidth = 2,ticks.colour = "black", ticks.linewidth = 1)) +
+  annotate( geom = "text", label = expression(atop("y = 0.95x + 9.3 * 10"^-5)), x = 0.006, y = 0.0125, size = 6) 
+  
+
+```
+
+
+
+```{r fig.height=12, fig.width=11}
+plate_spec / plate_compare
+```
+
+```{r fig.height=10, fig.width=16}
+l_plot + l_curve + es_curve + plate_spec
+```
+

@@ -127,6 +127,18 @@ combined <- bind_rows(light_data, dark_data) %>%
   mutate(which = "Lu")
 ```
 
+``` r
+l_plot <- combined %>% 
+  filter(wl < 850) %>% 
+  mutate(source = ifelse(source == "cal", "Reference", source)) %>% 
+  ggplot(aes(x = wl, y = diff, color = source)) +
+  # geom_errorbar(aes(ymin = ave - sd, ymax = ave + sd), size = 0.5, width = 1) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9) +
+  labs(x = "Wavelength", y = expression(paste("L, µW cm"^-2, "nm sr"^-1)), color = "") +
+  theme_classic2(20)
+```
+
 # Es
 
 ``` r
@@ -188,6 +200,18 @@ es_combined <- bind_rows(es_light_data, es_dark_data) %>%
   mutate(which = "ES")
 ```
 
+``` r
+e_plot <- es_combined %>% 
+  filter(wl < 850) %>% 
+  mutate(source = ifelse(source == "cal", "Reference", source)) %>% 
+  ggplot(aes(x = wl, y = diff, color = source)) +
+  # geom_errorbar(aes(ymin = ave - sd, ymax = ave + sd), size = 0.5, width = 1) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9) +
+  labs(x = "Wavelength", y = expression(paste("E, µW cm"^-2, "nm")), color = "") +
+  theme_classic2(20)
+```
+
 # Interpolate
 
 ``` r
@@ -220,9 +244,9 @@ interp <- combined %>%
   drop_na(es) %>% 
   distinct() %>% 
   
-  filter(source %in% c("LSky", "LT", "LSky_2", "LT_2")) %>% 
+  # filter(source %in% c("LSky", "LT", "LSky_2", "LT_2")) %>%
   group_by(wl) %>% 
-  mutate(mean_es = mean(es)) %>% 
+  mutate(mean_es = ifelse(!source == "cal", mean(es), NA)) %>% 
   ungroup() %>% 
   
   select(source, wl, lu, mean_es) %>% 
@@ -234,14 +258,50 @@ interp <- combined %>%
     
   fill(c(Lg, Lt), .direction = "updown")  %>% 
   ungroup() %>% 
-  mutate(rrs = (Lt - Lg)/mean_es) %>% 
+  mutate(cal_es = ifelse(source == "cal", (lu * pi / 0.99), NA),
+         rrs = (Lt - Lg)/mean_es) %>% 
   # filter(source %in% c("LT", "LT_2")) %>% 
   group_by(wl) %>% 
-  mutate(ave = mean(rrs),
-         sd = sd(rrs))
+  fill(cal_es, .direction = "updown") %>% 
+  mutate(ave = mean(rrs, na.rm = T),
+         sd = sd(rrs, na.rm = T)) %>% 
+  ungroup() %>% 
+  filter(!source == "cal") %>% 
+  mutate(cal_rrs = (Lt - Lg)/cal_es) %>% 
+  group_by(wl) %>% 
+  mutate(ave_cal = mean(cal_rrs),
+         sd_cal = sd(cal_rrs)) %>% 
+  ungroup()
 ```
 
     ## Joining, by = c("source", "wl")
+
+``` r
+l_curve <- interp %>% 
+  select(source, wl, Lg, Lt) %>% 
+  mutate(Lw = Lt - Lg) %>% 
+  distinct() %>% 
+  filter(source %in% c("LT", "LT_2")) %>% 
+  mutate(source = ifelse(source == "LT", "1", "2")) %>% 
+  pivot_longer(cols = c(Lg, Lt, Lw), names_to = "l", values_to = "value") %>% 
+  ggplot(aes(x = wl, y = value, color = l, group = interaction(source, l))) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9 ) +
+  labs(x = "Wavelength", y = expression(paste("L, µW cm"^-2, "nm sr"^-1)), color = "") +
+  theme_classic2(20)
+```
+
+``` r
+es_curve <- interp %>% 
+  select(wl, mean_es, cal_es) %>% 
+  distinct() %>% 
+  pivot_longer(cols = c(mean_es, cal_es), names_to = "type", values_to = "value") %>% 
+  ggplot(aes(x = wl, y = value, color = type)) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9, labels =  c(expression(paste("Sensor E"[s])), expression(paste("Plate-derived E"[s])) ) ) +
+  labs(x = "Wavelength", y = expression(paste("E, µW cm"^-2, "nm")), color = "") +
+  theme_classic2(20)
+```
 
 ``` r
 interp %>% 
@@ -253,7 +313,7 @@ interp %>%
   theme_classic2(20)
 ```
 
-![](lab7_above_water_files/figure-gfm/unnamed-chunk-6-1.png)<!-- -->
+![](lab7_above_water_files/figure-gfm/unnamed-chunk-10-1.png)<!-- -->
 
 ``` r
 send <- interp %>% 
@@ -355,4 +415,43 @@ all %>%
   guides(fill = F)
 ```
 
-![](lab7_above_water_files/figure-gfm/unnamed-chunk-10-1.png)<!-- -->
+![](lab7_above_water_files/figure-gfm/unnamed-chunk-14-1.png)<!-- -->
+
+``` r
+library(lmodel2)
+```
+
+``` r
+reg <- lmodel2(ave ~ ave_cal, data = interp, nperm = 99)
+```
+
+    ## RMA was not requested: it will not be computed.
+
+## Plots
+
+``` r
+plate_spec <-  interp %>% 
+  select(wl, ave, ave_cal) %>% 
+  distinct() %>% 
+  pivot_longer(cols = c(ave, ave_cal), names_to = "type", values_to = "value") %>% 
+  ggplot(aes(x = wl, y = value, color = type)) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9, labels =  c(expression(paste("Sensor E"[s])), expression(paste("Plate-derived E"[s])) ) ) +
+  labs(x = "Wavelength", y = expression(paste("Rrs, sr"^-1)), color = "") +
+  theme_classic2(20)
+```
+
+``` r
+plate_spec / plate_compare
+```
+
+    ## Warning in is.na(x): is.na() applied to non-(list or vector) of type
+    ## 'expression'
+
+![](lab7_above_water_files/figure-gfm/unnamed-chunk-19-1.png)<!-- -->
+
+``` r
+l_plot + l_curve + es_curve + plate_spec
+```
+
+![](lab7_above_water_files/figure-gfm/unnamed-chunk-20-1.png)<!-- -->
