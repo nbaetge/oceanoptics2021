@@ -1,0 +1,163 @@
+---
+title: "hydrolight"
+author: "Nicholas Baetge"
+date: "7/29/2021"
+output: html_document
+---
+
+# Load Libraries
+
+```{r setup}
+library(tidyverse)
+library(readxl)
+library(ggpubr)
+library(fs)
+library(lubridate)
+library(zoo)
+library(patchwork)
+library(viridis)
+```
+
+
+# Import Data
+
+```{r}
+e2_data <- read_csv("~/GITHUB/oceanoptics2021/data/hydrolight_lab8_e2.csv") %>% 
+  rename(run = X1) %>% 
+  mutate(rrs = lu/ed)
+
+e3_data <- read_csv("~/GITHUB/oceanoptics2021/data/hydrolight_lab8_e3.csv") %>% 
+  group_by(wl) %>% 
+  mutate(mean = ifelse(type == "classic", mean(rrs), NA),
+         diff = ifelse(type == "classic", diff(rrs), NA),  
+         per_delta = diff/mean) 
+
+```
+
+# IOP error effects on computed light fields
+
+```{r}
+e2.plot_e <- e2_data %>% 
+  # filter(z %in% c(0, 5, 50)) %>% 
+  ggplot(aes(x = z, y = ed, color = as.character(a), group = interaction(run))) +
+  geom_line(size = 1) +
+  labs(x = "Depth, m", y = expression(paste("E"[d], " W m"^2, "nm")), color = expression(italic("a"))) +
+  scale_color_viridis_d(end = 0.7) +
+  scale_x_reverse() + coord_flip() +
+  theme_classic2(20) 
+  
+```
+
+
+```{r}
+e2.plot_e_filt <- e2_data %>% 
+  filter(between(z,3,12)) %>%
+  ggplot(aes(x = z, y = ed, color = as.character(a), group = interaction(run))) +
+  geom_line(size = 1) +
+  labs(x = "Depth, m", y = expression(paste("E"[d], " W m"^2, "nm")), color = expression(italic("a"))) +
+  scale_color_viridis_d(end = 0.7) +
+  scale_x_reverse() + coord_flip() +
+  theme_classic2(20) 
+  
+```
+
+
+```{r}
+e2.plot_l <- e2_data %>% 
+  # filter(z %in% c(0, 5, 50)) %>% 
+  ggplot(aes(x = z, y = lu, color = as.character(a), group = interaction(run))) +
+  geom_line(size = 1) +
+  labs(x = "Depth, m", y = expression(paste("L"[u], " W m"^2, "nm sr"^-1)), color = expression(italic("a"))) +
+  scale_color_viridis_d(end = 0.7) +
+  scale_x_reverse() + coord_flip() +
+  theme_classic2(20) 
+  
+```
+
+
+```{r}
+e2.plot_l_filt <- e2_data %>% 
+  filter(between(z,3,12)) %>%
+  ggplot(aes(x = z, y = lu, color = as.character(a), group = interaction(run))) +
+  geom_line(size = 1) +
+  labs(x = "Depth, m", y = expression(paste("L"[u], " W m"^2, "nm sr"^-1)), color = expression(italic("a"))) +
+  scale_color_viridis_d(end = 0.7) +
+  scale_x_reverse() + coord_flip() +
+  theme_classic2(20) 
+  
+```
+
+
+```{r}
+e2.plot_rrs <- e2_data %>% 
+  # filter(z %in% c(0, 5, 50)) %>% 
+  ggplot(aes(x = z, y = rrs, color = as.character(a), group = interaction(run))) +
+  geom_line(size = 1) +
+  labs(x = "Depth, m", y = expression(paste("Rrs, sr"^-1)), color = expression(italic("a"))) +
+  scale_color_viridis_d(end = 0.7) +
+  scale_x_reverse() + coord_flip() +
+  theme_classic2(20) 
+  
+```
+
+
+
+
+
+```{r fig.height=3, fig.width=10}
+(e2.plot_e + inset_element(e2.plot_e_filt, 0.3, 0.1, 1, 0.8))  + (e2.plot_l +  inset_element(e2.plot_e_filt, 0.3, 0.1, 1, 0.8)) + e2.plot_rrs + plot_layout(guides = "collect")
+```
+
+# RRs on bbp
+
+```{r}
+e3.p1 <- e3_data %>% 
+  ggplot(aes(x = wl, y = rrs, color = as.character(bp), group = run)) +
+  geom_line(size = 1) +
+  labs(x = "Wavelength, nm", y = expression(paste("Rrs, sr"^-1)), color = expression(italic("b"[p]))) +
+  scale_color_viridis_d(end = 0.7) +
+  theme_classic2(20) 
+  
+```
+
+```{r}
+e3.p2 <- e3_data %>% 
+  ggplot(aes(x = wl, y = per_delta, color = as.character(bp), group = run)) +
+  geom_line(size = 1 ) +
+  labs(x = "Wavelength, nm", y = expression(paste("% Difference")), color = expression(italic("b"[p]))) +
+  scale_color_viridis_d(end = 0.7) +
+  theme_classic2(20) 
+  
+```
+
+```{r fig.height=4, fig.width=8}
+e3.p1 + e3.p2 + plot_layout(guides = "collect")
+```
+
+# Classic v New case 1 IOP
+
+```{r fig.height=4, fig.width=6}
+e3_data %>% 
+  filter(bp == 0.01) %>% 
+  ggplot(aes(x = wl, y = rrs, color = as.character(type), group = run)) +
+  geom_line(size = 1) +
+  labs(x = "Wavelength, nm", y = expression(paste("Rrs, sr"^-1)), color = " ") +
+  scale_color_viridis_d(end = 0.7) +
+  theme_classic2(20) 
+  
+```
+
+# eco v hydro
+
+```{r fig.height=4, fig.width=6}
+e3_data %>% 
+  mutate(program = ifelse(program == "eco", "EcoLight", "HydroLight")) %>% 
+  filter(type == "new", bp == 0.01) %>% 
+  ggplot(aes(x = wl, y = rrs, color = as.character(program), group = program)) +
+  geom_line(size = 1, alpha = 0.6) +
+  labs(x = "Wavelength, nm", y = expression(paste("Rrs, sr"^-1)), color = " ") +
+  scale_color_viridis_d(end = 0.7) +
+  theme_classic2(20) 
+```
+
+
