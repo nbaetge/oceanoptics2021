@@ -8,7 +8,7 @@ output: html_document
 # Load Libraries
 
 ```{r setup}
-knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
 library(tidyverse)
 library(readxl)
 library(ggpubr)
