@@ -1,0 +1,362 @@
+---
+title: "float_radio"
+author: "Nicholas Baetge"
+date: "8/4/2021"
+output: github_document
+---
+
+# Load Libraries
+
+```{r setup}
+library(tidyverse)
+library(readxl)
+library(ggpubr)
+library(fs)
+library(lubridate)
+# library(zoo)
+library(patchwork)
+library(viridis)
+```
+
+# Import Data
+
+```{r}
+raw_eu <- read_csv("~/GITHUB/oceanoptics2021/data/lab13/es_Sensor0052-20210804093113.csv", skip = 2) %>% 
+  rename(date = `date [EST]`) %>% 
+  mutate(date = mdy_hm(date)) %>% 
+  pivot_longer(cols = c(2:8), names_to = "wl", values_to = "values")
+
+```
+
+
+# Lu
+
+```{r}
+raw_lu <- read_csv("~/GITHUB/oceanoptics2021/data/lab13/lu_Sensor0052-20210804093043.csv", skip = 2) %>% 
+  rename(date = `date [EST]`) %>% 
+  mutate(date = mdy_hm(date)) %>% 
+  pivot_longer(cols = c(2:8), names_to = "wl", values_to = "values")
+
+```
+
+
+
+```{r}
+l_plot <- raw_lu %>% 
+  mutate(source = ifelse(source == "cal", "Reference", source)) %>% 
+  ggplot(aes(x = wl, y = diff, color = source)) +
+  # geom_errorbar(aes(ymin = ave - sd, ymax = ave + sd), size = 0.5, width = 1) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9) +
+  labs(x = "Wavelength", y = expression(paste("L, µW cm"^-2, "nm sr"^-1)), color = "") +
+  theme_classic2(20)
+```
+
+
+
+# Es
+
+```{r}
+#save filenames that are in the folder of interest
+es_dark <- fs::dir_ls("~/GITHUB/oceanoptics2021/data/lab7/above_water_Es_Lu/Es_processed/g22/dark/", regexp = "\\.csv$")
+
+es_light <- fs::dir_ls("~/GITHUB/oceanoptics2021/data/lab7/above_water_Es_Lu/Es_processed/g22/light/", regexp = "\\.csv$")
+```
+
+```{r}
+
+#store all data from all files one data frame (this is what the map_dfr function does). We'll add the filenames to the dataframe as well, in a column called "source. 
+
+
+es_dark_data <- es_dark %>% 
+  map_dfr(read.csv, header = T, .id = "source") %>% 
+  mutate(source = gsub("/Users/nicholasbaetge/GITHUB/oceanoptics2021/data/lab7/above_water_Es_Lu/Es_processed/g22/dark/", "", source),
+         source = gsub(".csv", "", source)) %>% 
+  mutate(source = ifelse(source == "g22_LSky_07272021-HED0187o", "LSky", source),
+         source = ifelse(source == "g22_LT_07272021-HED0187o", "LT", source),
+         source = ifelse(source == "g22_Lsky_07272021_a-HED0187o", "LSky_2", source),
+         source = ifelse(source == "g22_Lwater_07272021_a-HED0187o", "LT_2", source),
+         source = ifelse(source == "g22_calibrate_07272021-HED0187o", "cal", source) ) %>% 
+  select(-c(2:4, DARK_SAMP.ES.:TIMETAG2)) %>% 
+  group_by(source) %>% 
+  summarize_all(list(med = median)) %>% 
+  mutate(type = "dark") %>% 
+  select(source, type, everything()) 
+
+es_light_data <- es_light %>% 
+  map_dfr(read.csv, header = T, .id = "source") %>% 
+  mutate(source = gsub("/Users/nicholasbaetge/GITHUB/oceanoptics2021/data/lab7/above_water_Es_Lu/Es_processed/g22/light/", "", source),
+         source = gsub(".csv", "", source)) %>% 
+  #add some distinguisihing metadata about the filenames 
+  mutate(source = ifelse(source == "g22_LSky_07272021-HSE0187o", "LSky", source),
+         source = ifelse(source == "g22_LT_07272021-HSE0187o", "LT", source),
+         source = ifelse(source == "g22_Lsky_07272021_a-HSE0187o", "LSky_2", source),
+         source = ifelse(source == "g22_Lwater_07272021_a-HSE0187o", "LT_2", source),
+         source = ifelse(source == "g22_calibrate_07272021-HSE0187o", "cal", source) ) %>% 
+  select(-c(2:4, DARK_SAMP.ES.:TIMETAG2)) %>% 
+  group_by(source) %>% 
+  summarize_all(list(med = median)) %>% 
+  mutate(type = "light") %>% 
+  select(source, type, everything()) 
+
+es_combined <- bind_rows(es_light_data, es_dark_data) %>% 
+  group_by(source) %>% 
+  pivot_longer(cols = -c(source, type), names_to = "wl", values_to = "values") %>% 
+  ungroup() %>% 
+  arrange(source, wl) %>% 
+  group_by(source, wl) %>% 
+  mutate(diff = values[type == "light"] - values) %>% 
+  ungroup() %>% 
+  filter(type == "dark") %>% 
+  select(c(source, wl, diff)) %>% 
+  mutate(wl = gsub("ES.", "", wl),
+         wl = gsub("._med", "", wl),
+         wl = as.numeric(wl)
+         ) %>% 
+  mutate(which = "ES")
+```
+
+```{r}
+e_plot <- es_combined %>% 
+  filter(wl < 850) %>% 
+  mutate(source = ifelse(source == "cal", "Reference", source)) %>% 
+  ggplot(aes(x = wl, y = diff, color = source)) +
+  # geom_errorbar(aes(ymin = ave - sd, ymax = ave + sd), size = 0.5, width = 1) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9) +
+  labs(x = "Wavelength", y = expression(paste("E, µW cm"^-2, "nm")), color = "") +
+  theme_classic2(20)
+```
+
+# Interpolate
+
+```{r}
+library(zoo)
+
+es_wl <- unique(es_combined$wl)
+surf_reflect = 0.028
+
+interp <- combined %>%
+  group_by(source) %>% 
+  group_modify(~ add_row(., wl = es_wl)) %>% 
+  arrange(source, wl) %>% 
+  group_by(source) %>% 
+  fill(which, .direction = "updown") %>% 
+  mutate(lu = na.approx(diff)) %>% 
+  select(source, wl, lu) %>% 
+  ungroup() %>% 
+  left_join(., es_combined %>% 
+              select(source, wl, diff) %>% rename(es = diff)) %>% 
+  ungroup() %>% 
+  drop_na(es) %>% 
+  distinct() %>% 
+  
+  # filter(source %in% c("LSky", "LT", "LSky_2", "LT_2")) %>%
+  group_by(wl) %>% 
+  mutate(mean_es = ifelse(!source == "cal", mean(es), NA)) %>% 
+  ungroup() %>% 
+  
+  select(source, wl, lu, mean_es) %>% 
+  distinct() %>% 
+  mutate(Lg = ifelse(source %in% c("LSky", "LSky_2"), lu * surf_reflect, NA),
+         Lt = ifelse(source %in% c("LT", "LT_2"), lu, NA)) %>% 
+ 
+  group_by(wl) %>% 
+    
+  fill(c(Lg, Lt), .direction = "updown")  %>% 
+  ungroup() %>% 
+  mutate(cal_es = ifelse(source == "cal", (lu * pi / 0.99), NA),
+         rrs = (Lt - Lg)/mean_es) %>% 
+  # filter(source %in% c("LT", "LT_2")) %>% 
+  group_by(wl) %>% 
+  fill(cal_es, .direction = "updown") %>% 
+  mutate(ave = mean(rrs, na.rm = T),
+         sd = sd(rrs, na.rm = T)) %>% 
+  ungroup() %>% 
+  filter(!source == "cal") %>% 
+  mutate(cal_rrs = (Lt - Lg)/cal_es) %>% 
+  group_by(wl) %>% 
+  mutate(ave_cal = mean(cal_rrs),
+         sd_cal = sd(cal_rrs)) %>% 
+  ungroup()
+  
+
+
+```
+
+```{r}
+l_curve <- interp %>% 
+  select(source, wl, Lg, Lt) %>% 
+  mutate(Lw = Lt - Lg) %>% 
+  distinct() %>% 
+  filter(source %in% c("LT", "LT_2")) %>% 
+  mutate(source = ifelse(source == "LT", "1", "2")) %>% 
+  pivot_longer(cols = c(Lg, Lt, Lw), names_to = "l", values_to = "value") %>% 
+  ggplot(aes(x = wl, y = value, color = l, group = interaction(source, l))) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9 ) +
+  labs(x = "Wavelength", y = expression(paste("L, µW cm"^-2, "nm sr"^-1)), color = "") +
+  theme_classic2(20)
+```
+
+```{r}
+es_curve <- interp %>% 
+  select(wl, mean_es, cal_es) %>% 
+  distinct() %>% 
+  pivot_longer(cols = c(mean_es, cal_es), names_to = "type", values_to = "value") %>% 
+  ggplot(aes(x = wl, y = value, color = type)) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9, labels =  c(expression(paste("Sensor E"[s])), expression(paste("Plate-derived E"[s])) ) ) +
+  labs(x = "Wavelength", y = expression(paste("E, µW cm"^-2, "nm")), color = "") +
+  theme_classic2(20)
+```
+
+
+```{r}
+interp %>% 
+  select(wl, ave, sd) %>% distinct() %>% 
+  ggplot(aes(x = wl, y = ave)) +
+  geom_errorbar(aes(ymin = ave - sd, ymax = ave + sd), size = 0.5, width = 1) +
+  geom_line(size = 1) +
+  labs(x = "Wavelength", y = expression(paste("Rrs, sr"^-1)), color = "") +
+  theme_classic2(20)
+```
+
+```{r}
+send <- interp %>% 
+  select(wl, ave, sd) %>% 
+  rename(ave_rrs = ave,
+         sd_rrs = sd) %>% 
+  mutate(group = "Nick") %>% 
+  distinct() 
+
+write_csv(send, "~/nicholasbaetge@gmail.com - Google Drive/My Drive/OO2021_StudentShareDrive/Data/Lab 7/G2p2_above_water.csv")
+```
+
+```{r}
+#import class data 
+
+seb <- read_csv("~/GITHUB/oceanoptics2021/data/lab7/above_water_Es_Lu/G_2_1_Rrs.csv") %>% 
+  rename(wl = `Wavelength (nm)`,
+         ave_rrs = Rrs) %>% 
+  select(wl, ave_rrs) %>% 
+  mutate(group = "Seb")
+
+sarah <- read_csv("~/GITHUB/oceanoptics2021/data/lab7/above_water_Es_Lu/rrs.csv") %>% 
+  rename(wl = wave, 
+         ave_rrs = rrs) %>% 
+  mutate(group = "Sarah")
+
+edr <- read_csv("~/GITHUB/oceanoptics2021/data/lab7/above_water_Es_Lu/lab7group4.csv") 
+
+
+all <- bind_rows(send, seb, sarah, edr) %>% 
+  mutate(order = ifelse(group == "Seb", 1, NA),
+         order = ifelse(group == "Nick", 2, order),
+         order = ifelse(group == "Sarah", 3, order),
+         order = ifelse(group == "Edr", 4, order),
+         )
+```
+
+
+
+```{r}
+
+phone_wl <- c(450, 520, 620,
+              450, 520, 620,
+              450, 520, 620,
+              450, 520, 620,
+              450, 520, 620)
+
+group_vals <- c(0.006, 0.007, 0.011, 
+            0.012, 0.007, 0.007, 
+            0.008, 0.012, 0.008, 
+            0.008, 0.012, 0.008, 
+            0.011, 0.015, 0.009)
+
+groups <- c("4", "4", "4", 
+            "4", "4", "4",
+            "2", "2", "2",
+            "3", "3", "3",
+            "1", "1", "1")
+
+all_phone <- tibble(phone_wl, group_vals, groups) %>% 
+  rename(order = groups,
+         wl = phone_wl) 
+
+```
+
+
+```{r}
+all %>% 
+  rename(ave = ave_rrs,
+         sd = sd_rrs) %>% 
+  ggplot(aes(x = wl, y = ave, color = as.character(order))) +
+  geom_errorbar(aes(ymin = ave - sd, ymax = ave + sd), size = 0.5, width = 1) +
+  geom_line(size = 1) +
+  geom_point(data = all_phone, aes(x = wl, y = group_vals, fill = order), shape = 21, size = 3, color = "black", alpha = 0.7) + 
+  labs(x = "Wavelength", y = expression(paste("Rrs, sr"^-1)), color = "Group") +
+  theme_classic2(20) + 
+  guides(fill = F)
+```
+
+
+
+```{r}
+library(lmodel2)
+```
+
+
+```{r}
+reg <- lmodel2(ave ~ ave_cal, data = interp, nperm = 99)
+
+
+```
+
+
+## Plots
+
+```{r}
+plate_spec <-  interp %>% 
+  select(wl, ave, ave_cal) %>% 
+  distinct() %>% 
+  pivot_longer(cols = c(ave, ave_cal), names_to = "type", values_to = "value") %>% 
+  ggplot(aes(x = wl, y = value, color = type)) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(end = 0.9, labels =  c(expression(paste("Sensor E"[s])), expression(paste("Plate-derived E"[s])) ) ) +
+  labs(x = "Wavelength", y = expression(paste("Rrs, sr"^-1)), color = "") +
+  theme_classic2(20)
+```
+
+
+
+```{r echo=FALSE, fig.height=8, fig.width=6, message=FALSE, warning=FALSE}
+plate_compare <- interp %>% 
+  ggplot(aes(x = ave_cal, y = ave)) + 
+  geom_point(aes(fill = wl), shape = 21, color = "black", size = 4, alpha = 0.7) +
+   geom_abline(intercept = reg$regression.results[3,2],
+              slope = reg$regression.results[3,3],colour = "black", linetype = 2, size = 1) +
+   geom_abline(intercept = reg$confidence.intervals[3,2],
+              slope = reg$confidence.intervals[3,4],colour = "grey", linetype = 3, size = 1) +
+  geom_abline(intercept = reg$confidence.intervals[3,3],
+              slope = reg$confidence.intervals[3,5],colour = "grey", linetype = 3, size = 1) +
+  geom_abline(intercept = 0, slope = 1, size = 1, color = "red") +
+  labs(x =  expression(paste("Rrs, sr"^-1," (Plate-derived E"[s],")")), y = expression(paste("Rrs, sr"^-1)), fill = "Wavelength") +
+  scale_fill_viridis_c() +
+  theme_classic2(base_size = 21) +
+  guides(fill = guide_colourbar(barheight = 10, barwidth = 2, frame.colour = "black", frame.linewidth = 2,ticks.colour = "black", ticks.linewidth = 1)) +
+  annotate( geom = "text", label = expression(atop("y = 0.95x + 9.3 * 10"^-5)), x = 0.006, y = 0.0125, size = 6) 
+  
+
+```
+
+
+
+```{r fig.height=12, fig.width=11}
+plate_spec / plate_compare
+```
+
+```{r fig.height=10, fig.width=16}
+l_plot + l_curve + es_curve + plate_spec
+```
+

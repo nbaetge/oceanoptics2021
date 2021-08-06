@@ -1,0 +1,134 @@
+---
+title: "chl_fl_turner"
+author: "Nicholas Baetge"
+date: "8/6/2021"
+output: html_document
+---
+
+# Load Libraries
+
+```{r setup}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+library(tidyverse)
+library(readxl)
+library(ggpubr)
+library(fs)
+library(lubridate)
+library(zoo)
+library(patchwork)
+library(viridis)
+```
+
+# Turner calibration coefficients
+
+```{r}
+# turner cal
+M = 484.24     # M calibration
+M_u = 5.97       # M uncertainty calibration (+/-)
+A = 8.8        # A calibration
+A_u = 0.41 	     # A uncertainty calibration
+acoh = 10         # acoh 
+acoh_u = 0.5      # acoh uncertainty
+vfilt_u = 2       # volume filtered uncertainty
+```
+
+
+
+# Import Data and Calculate Chl & Pheo
+
+```{r}
+data <- read_csv("~/GITHUB/oceanoptics2021/cruise_data/chl_fl/OO21_Chl_Spec - data.csv") %>% 
+  mutate(fo = (o_read - o_blank) / o_scale,
+         fa = (a_read - a_blank) / a_scale,
+         chl = M * (fo - fa) * (acoh / vol_filt),
+         pheo = M * (A * fa - fo) * (acoh / vol_filt)  ) %>% 
+  mutate_at(vars(chl, pheo), round, 1) %>% 
+  mutate(chl_uncert = sqrt( (((fo - fa) * (acoh/vol_filt))^2 * M_u^2) +
+                              ((M * (acoh/vol_filt))^2 * o_read_uncert^2) +
+                              ((-M * (acoh/vol_filt))^2 * a_read_uncert^2) +
+                              (((-M * (fo - fa) * (acoh/vol_filt^2)))^2 * vfilt_u^2) +
+                              ((M * (fo - fa) * (1/vol_filt))^2 * acoh_u^2 ) )) %>% 
+  mutate(
+         pheo_uncert = sqrt( (((A * (fa - fo)) * (acoh/vol_filt))^2 * M_u^2) +
+                              ((-M * (acoh/vol_filt))^2 * o_read_uncert^2) +
+                              ((A * M * (acoh/vol_filt))^2 * a_read_uncert^2) +
+                              ((-M * (A * (fa - fo)) * (acoh/vol_filt))^2 * vfilt_u^2 ) +
+                              (((M * fa * (acoh/vol_filt^2)))^2 * A_u^2) +
+                              ((M * (A * (fa - fo)) * (1/vol_filt))^2 * acoh_u^2 ))
+         ) %>% 
+  group_by(cruise, station, type, target_depth, depth, filtration) %>% 
+  mutate(ave_chl = mean(chl),
+         sd_chl = sd(chl),
+         ave_chl_u = mean(chl_uncert),
+         ave_pheo = mean(pheo),
+         sd_pheo = sd(pheo),
+         ave_pheo_u = mean(pheo_uncert))
+```
+
+# Write CSV
+
+```{r}
+write_csv(data, "~/nicholasbaetge@gmail.com - Google Drive/My Drive/OO2021_StudentShareDrive/Data/Cruise/PROCESSED/Turner/chl_pheo.csv")
+```
+
+
+# Plot
+
+```{r}
+data %>% 
+  select(cruise:depth, ave_chl, sd_chl) %>% 
+  distinct() %>% 
+  mutate(station = ifelse(station == 1, "Offshore", "Mooring")) %>% 
+  filter(filtration == "total") %>% 
+  ggplot(aes(x = depth, y = ave_chl, group = interaction(cruise, station, type))) + 
+  # geom_ribbon(aes(ymin = ave_chl - ave_chl_u, ymax = ave_chl + ave_chl_u), alpha = 0.1) +
+  geom_line(aes(color = cruise), size = 0.7, alpha = 0.7) +
+  geom_point(aes(color = cruise, shape = type), size = 2) +
+  labs(x = "Depth, m", y = expression(paste("Chl ", italic("a"),", mg m"^-3))) +
+  scale_x_reverse() +
+  coord_flip() +
+  scale_fill_viridis_d(end = 0.7) +
+  scale_color_viridis_d(end = 0.7) +
+  # guides(colour = F, fill = F, shape = F, linetype = F) +
+  theme_classic2(base_size = 20) +
+  theme(legend.title = element_blank(),
+        panel.spacing.x = unit(1, "cm"),
+        axis.text.x = element_text(angle = 0),
+        legend.key.size = unit(1, "cm")) +
+  facet_grid(~station)
+```
+
+
+```{r}
+data %>% 
+  select(cruise:depth, ave_pheo, sd_pheo) %>% 
+  distinct() %>% 
+  mutate(station = ifelse(station == 1, "Offshore", "Mooring")) %>% 
+  filter(filtration == "total") %>% 
+  ggplot(aes(x = depth, y = ave_pheo, group = interaction(cruise, station, type))) + 
+  # geom_ribbon(aes(ymin = ave_chl - ave_chl_u, ymax = ave_chl + ave_chl_u), alpha = 0.1) +
+  geom_line(aes(color = cruise), size = 0.7, alpha = 0.7) +
+  geom_point(aes(color = cruise, shape = type), size = 2) +
+  labs(x = "Depth, m", y = expression(paste("Pheophytin, mg m"^-3))) +
+  scale_x_reverse() +
+  coord_flip() +
+  scale_fill_viridis_d(end = 0.7) +
+  scale_color_viridis_d(end = 0.7) +
+  # guides(colour = F, fill = F, shape = F, linetype = F) +
+  theme_classic2(base_size = 20) +
+  theme(legend.title = element_blank(),
+        panel.spacing.x = unit(1, "cm"),
+        axis.text.x = element_text(angle = 0),
+        legend.key.size = unit(1, "cm")) +
+  facet_grid(~station)
+```
+
+
+
+
+
+
+
+
+
+

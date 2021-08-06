@@ -1,0 +1,529 @@
+---
+title: "acs"
+author: "Nicholas Baetge"
+date: "7/22/2021"
+output: github_document
+---
+
+
+# Load Libraries
+
+```{r setup}
+library(tidyverse)
+library(readxl)
+library(ggpubr)
+library(fs)
+library(lubridate)
+library(zoo)
+library(patchwork)
+library(viridis)
+```
+
+
+# Import Data
+
+```{r}
+#save filenames that are in the folder of interest
+csv_files <- fs::dir_ls("~/GITHUB/OO21_Experiments/data/TW21-1/ACS/", regexp = "\\.csv$")
+```
+
+
+```{r}
+#the first two rows of the acs data output contain header and unit data. we'll store those separately...units first and we'll circle back to headers
+units <- colnames(read_csv(csv_files[1], skip = 1))
+
+#extract the wavelengths from the "a" column and store as a vector (these are also the same for c)
+wavelengths <- units[4] %>% strsplit(., split = " ") %>% .[[1]] %>%  str_remove(., "1/m	lambda=") 
+   
+#store all data from all files one data frame (this is what the map_dfr function does). We'll add the filenames to the dataframe as well, in a column called "source. 
+data <- csv_files %>% 
+  map_dfr(read.csv, skip = 2, header = F, .id = "source") %>% 
+  #shorten the filenames
+  mutate(source = gsub("/Users/nicholasbaetge/GITHUB/OO21_Experiments/data/TW21-1/ACS/", "", source),
+         source = gsub(".csv", "", source)) %>% 
+  #add some distinguisihing metadata about the filenames 
+  mutate(sample = ifelse(grepl("TW",.$source), "TW", "FSW"),
+         sample = ifelse(grepl("FSW_A", .$source), "FSW_A", sample),
+         sample = ifelse(grepl("FSW_B", .$source), "FSW_B", sample),
+         sample = ifelse(grepl("FSW_C", .$source), "FSW_C", sample),
+         sample = ifelse(grepl("FSW_ACS9", .$source), "FSW_End", sample)
+         ) %>%
+  select(source, sample, everything())
+
+#add the headers to the dataframe
+headers <- c("source", "sample", colnames(read_csv(csv_files[1])))
+colnames(data) <-  headers
+
+
+
+```
+
+
+# c
+
+```{r}
+c <- data %>% 
+  select(c) %>% 
+  mutate(c = str_squish(c)) %>% 
+  #remove the brackets
+  mutate(c = str_replace_all(c, "\\[|\\]", "")) %>%
+  mutate(c = str_squish(c)) %>% 
+  separate(c, sep = " ", into = wavelengths) %>% 
+  mutate_all(as.numeric)
+  
+```
+
+```{r}
+c_data <- bind_cols(data, c) %>% 
+  select(-c, -a) %>% 
+  mutate(time = ymd_hms(time),
+         hour = floor_date(time, unit = "hour")) %>% 
+  select(source:sample, hour, everything()) %>% 
+  ungroup() 
+
+```
+
+## medians and se (by hour)
+
+```{r warning=FALSE}
+c_med <- c_data %>% 
+  select(sample:hour, c(9:89)) %>% 
+  group_by(sample, hour) %>% 
+  mutate_at(c(3:83), list(med = median)) %>% 
+  ungroup() %>% 
+  select(sample:hour, contains("med")) %>% 
+  distinct() %>% 
+  rename_at(.vars = vars(ends_with("_med")),
+            .funs = funs(sub("_med", "", .)))
+```
+
+
+```{r}
+c_se <- c_data %>% 
+  select(sample:hour, c(9:89)) %>% 
+  group_by(sample, hour) %>%  
+  mutate_at(c(3:83), list(se = function(x) sd(x) / sqrt(length(x)))) %>% 
+  ungroup() %>% 
+  select(sample:hour, contains("se")) %>% 
+  distinct() %>% 
+  rename_at(.vars = vars(ends_with("_se")),
+            .funs = funs(sub("_se", "", .)))
+
+c_pivot <- c_med %>% 
+  pivot_longer(c(3:83), names_to = "wl", values_to = "c" ) %>%
+  mutate_at(vars(c), as.numeric) %>% 
+  bind_cols(., 
+            c_se %>% 
+  pivot_longer(c(3:83), names_to = "wl", values_to = "se" ) %>%
+  mutate_at(vars(se), as.numeric) %>% select(-sample, -hour, -wl)) %>% 
+  mutate_at(vars(wl), as.numeric) %>% 
+   mutate(total_c = ifelse(grepl("TW", .$sample), c, NA),
+         cdom_c = ifelse(grepl("FSW", .$sample), c, NA),
+         se_total_c = ifelse(grepl("TW", .$sample), se, NA)) 
+
+```
+
+
+interpolate cdom over time
+```{r}
+times <- pivot %>% 
+  filter(sample == "TW") %>% 
+  select(hour, wl) %>% 
+  unique()
+
+cdom <- pivot %>%
+  filter(sample == c("FSW", "FSW_End")) %>% 
+  select(-sample) %>% 
+  add_row(., hour = times$hour, wl = times$wl) %>% 
+  arrange(wl, hour) %>% 
+  group_by(wl, hour) %>% 
+  mutate(cdom_c = mean(cdom_c, na.rm = T)) %>% 
+  select(hour, wl, cdom_c) %>% 
+  distinct() %>% 
+  ungroup() %>% 
+  group_by(wl) %>% 
+  mutate(cdom_c = na.approx(cdom_c)) %>% 
+  ungroup()
+
+
+  
+```
+
+plot cdom
+
+## plot
+
+```{r}
+c_cdom.plot <- cdom %>% 
+  mutate(interv = interval(first(hour), hour),
+         s = as.numeric(interv),
+         hours = s/3600) %>% 
+  ggplot(aes(x = wl, y = cdom_c, color = hours, group = hours)) +
+  geom_line(size = 1) +
+  labs(x = expression(paste("Wavelength, nm"^-1)), y = expression(paste("c"[cdom],", m"^-1)), color = "Hours") +
+  scale_color_viridis() +
+  theme_classic2(20) +
+  guides(color = guide_colourbar(barheight = 8, barwidth = 1, frame.colour = "black", frame.linewidth = 2,ticks.colour = "black", ticks.linewidth = 1, reverse = T)) 
+  
+```
+
+
+```{r}
+c_pivot %>% 
+  filter(sample == "FSW_End") %>% 
+  mutate(interv = interval(first(hour), hour),
+         s = as.numeric(interv),
+         hours = s/3600) %>% 
+  ggplot(aes(x = wl, y = c, color = hours, group = hours)) +
+  geom_errorbar(aes(ymin = c - se, ymax = c + se), size = 3, width = 1) +
+  geom_line(size = 1) +
+  labs(x = expression(paste("Wavelength, nm"^-1)), y = expression(paste("c"[cdom],", m"^-1)), color = "Hours") +
+  scale_color_viridis() +
+  theme_classic2(20) +
+  guides(color = guide_colourbar(barheight = 8, barwidth = 1, frame.colour = "black", frame.linewidth = 2,ticks.colour = "black", ticks.linewidth = 1, reverse = T)) 
+  
+```
+
+
+## derive cp
+
+```{r}
+cp_data <- c_pivot %>% 
+  filter(sample == "TW") %>% 
+  select(-cdom_c) %>% 
+  left_join(., cdom) %>% 
+  mutate(cp = total_c - cdom_c)
+
+```
+
+```{r}
+c_total.plot <- cp_data %>% 
+  mutate(interv = interval(first(hour), hour),
+         s = as.numeric(interv),
+         hours = s/3600) %>% 
+  ggplot(aes(x = wl, y = total_c, color = hours, group = hours)) +
+  geom_line(size = 1) +
+  labs(x = expression(paste("Wavelength, nm"^-1)), y = expression(paste("c"[total],", m"^-1)), color = "Hours") +
+  scale_color_viridis() +
+  theme_classic2(20) +
+  guides(color = guide_colourbar(barheight = 8, barwidth = 1, frame.colour = "black", frame.linewidth = 2,ticks.colour = "black", ticks.linewidth = 1, reverse = T)) 
+```
+
+```{r}
+cp <- cp_data %>% 
+  mutate(interv = interval(first(hour), hour),
+         s = as.numeric(interv),
+         hours = s/3600) %>% 
+  filter
+  ggplot(aes(x = wl, y = cp, color = hours, group = hours)) +
+  geom_line(size = 1) +
+  labs(x = expression(paste("Wavelength, nm"^-1)), y = expression(paste("c"[p],", m"^-1)), color = "Hours") +
+  scale_color_viridis() +
+  theme_classic2(20) +
+  guides(color = guide_colourbar(barheight = 8, barwidth = 1, frame.colour = "black", frame.linewidth = 2,ticks.colour = "black", ticks.linewidth = 1, reverse = T)) 
+```
+
+
+# a
+
+
+```{r}
+#extract the a-tube data and separate out the data
+a <- data %>% 
+  select(a) %>% 
+  #there are sometimes one, two, or three spaces between the data. str_squish helps us deal with that
+  mutate(a = str_squish(a)) %>% 
+  #remove the brackets
+  mutate(a = str_replace_all(a, "\\[|\\]", "")) %>%
+  mutate(a = str_squish(a)) %>% 
+  separate(a, sep = " ", into = wavelengths) %>% 
+  mutate_all(as.numeric)
+  
+```
+
+
+```{r}
+#combine a data with metadata and change data classes
+a_data <- bind_cols(data, a) %>% 
+  select(-c, -a) %>% 
+  mutate(time = ymd_hms(time),
+         hour = floor_date(time, unit = "hour")) %>% 
+  select(source:sample, hour, everything()) %>% 
+  ungroup() 
+```
+
+## medians and se
+
+```{r}
+#calculate medians for each wavelength
+a_med <- a_data %>% 
+ select(sample:hour, c(9:89)) %>% 
+  group_by(sample, hour) %>% 
+  mutate_at(c(3:83), list(med = median)) %>% 
+  ungroup() %>% 
+  select(sample:hour, contains("med")) %>% 
+  distinct() %>% 
+  rename_at(.vars = vars(ends_with("_med")),
+            .funs = funs(sub("_med", "", .)))
+```
+
+```{r}
+#calculate se
+a_se <- a_data %>% 
+  select(sample:hour, c(9:89)) %>% 
+  group_by(sample, hour) %>%  
+  mutate_at(c(3:83), list(se = function(x) sd(x) / sqrt(length(x)))) %>% 
+  ungroup() %>% 
+  select(sample:hour, contains("se")) %>% 
+  distinct() %>% 
+  rename_at(.vars = vars(ends_with("_se")),
+            .funs = funs(sub("_se", "", .)))
+
+#combine median and se data and melt for plotting
+a_pivot <- a_med %>% 
+  pivot_longer(c(3:83), names_to = "wl", values_to = "a" ) %>%
+  mutate_at(vars(a), as.numeric) %>% 
+  bind_cols(., 
+            a_se %>% 
+  pivot_longer(c(3:83), names_to = "wl", values_to = "se" ) %>%
+  mutate_at(vars(se), as.numeric) %>% select(-hour, -sample, -wl)) %>% 
+  mutate_at(vars(wl), as.numeric) %>% 
+   mutate(total_a = ifelse(grepl("TW", .$sample), a, NA),
+         cdom_a = ifelse(grepl("FSW", .$sample), a, NA),
+         se_total_a = ifelse(grepl("TW", .$sample), se, NA)) 
+```
+ 
+ 
+ 
+#interpolate cdom over time
+```{r}
+times_a <- a_pivot %>% 
+  filter(sample == "TW") %>% 
+  select(hour, wl) %>% 
+  unique()
+
+cdom_a <- a_pivot %>%
+  filter(sample %in% c("FSW_C", "FSW_End")) %>% 
+  select(-sample) %>% 
+  add_row(., hour = times$hour, wl = times$wl) %>% 
+  arrange(wl, hour) %>% 
+  group_by(wl, hour) %>% 
+  mutate(cdom_a = mean(cdom_a, na.rm = T)) %>% 
+  select(hour, wl, cdom_a) %>% 
+  distinct() %>% 
+  ungroup() %>% 
+  group_by(wl) %>% 
+  mutate(cdom_a = na.approx(cdom_a)) %>% 
+  ungroup()
+  
+```
+
+plot cdom
+
+## plot
+
+```{r}
+cdom_a %>% 
+  mutate(interv = interval(first(hour), hour),
+         s = as.numeric(interv),
+         hours = s/3600) %>% 
+  ggplot(aes(x = wl, y = cdom_a, color = hours, group = hours)) +
+  geom_line(size = 1) +
+  labs(x = expression(paste("Wavelength, nm"^-1)), y = expression(paste("a"[cdom],", m"^-1)), color = "Hours") +
+  scale_color_viridis() +
+  theme_classic2(20) +
+  guides(color = guide_colourbar(barheight = 8, barwidth = 1, frame.colour = "black", frame.linewidth = 2,ticks.colour = "black", ticks.linewidth = 1, reverse = T)) 
+  
+```
+
+# derive ap 
+
+```{r}
+ap_data <- a_pivot %>% 
+  filter(sample == "TW") %>% 
+  select(-cdom_a) %>% 
+  left_join(., cdom_a) %>% 
+  mutate(ap = total_a - cdom_a)
+
+```
+
+
+```{r}
+ap_data %>% 
+  mutate(interv = interval(first(hour), hour),
+         s = as.numeric(interv),
+         hours = s/3600) %>% 
+  filter(hours == 0) %>% 
+  ggplot(aes(x = wl, y = total_a, color = hours, group = hours)) +
+  geom_line(size = 1) +
+  labs(x = expression(paste("Wavelength, nm"^-1)), y = expression(paste("a"[total],", m"^-1)), color = "Hours") +
+  scale_color_viridis() +
+  theme_classic2(20) +
+  guides(color = guide_colourbar(barheight = 8, barwidth = 1, frame.colour = "black", frame.linewidth = 2,ticks.colour = "black", ticks.linewidth = 1, reverse = T)) 
+```
+
+
+```{r}
+ap_data %>% 
+  mutate(interv = interval(first(hour), hour),
+         s = as.numeric(interv),
+         hours = s/3600) %>% 
+  filter(hours %in% c(0,1)) %>%
+  # filter(wl > 600) %>% 
+  ggplot(aes(x = wl, y = ap, color = hours, group = hours)) +
+  geom_line(size = 2) +
+  labs(x = expression(paste("Wavelength, nm"^-1)), y = expression(paste("a"[p],", m"^-1)), color = "Hours") +
+  scale_color_viridis() +
+  theme_classic2(20) +
+  guides(color = guide_colourbar(barheight = 8, barwidth = 1, frame.colour = "black", frame.linewidth = 2,ticks.colour = "black", ticks.linewidth = 1, reverse = T)) 
+```
+
+
+# combine ap and cp data
+
+```{r}
+combined <- bind_cols(ap_data %>% select(-a, -se), cp_data %>% select(-c(sample, hour, wl, -c, -se))) %>% 
+  mutate(b = cp - ap) 
+```
+
+
+## correct for temperature and scattering
+
+### sullivan et al 2006 values
+
+```{r}
+#sullivan et al 2006 values
+
+psi_wl <-  c(400,402,404,406,408,410,412,414,416,418,420,422,424,426,428,430,432,434,436,438,440,442,444,446,448,450,452,454,456,458,460,462,464,466,468,470,472,474,476,478,480,482,484,486,488,490,492,494,496,498,500,502,504,506,508,510,512,514,516,518,520,522,524,526,528,530,532,534,536,538,540,542,544,546,548,550,552,554,556,558,560,562,564,566,568,570,572,574,576,578,580,582,584,586,588,590,592,594,596,598,600,602,604,606,608,610,612,614,616,618,620,622,624,626,628,630,632,634,636,638,640,642,644,646,648,650,652,654,656,658,660,662,664,666,668,670,672,674,676,678,680,682,684,686,688,690,692,694,696,698,700,702,704,706,708,710,712,714,716,718,720,722,724,726,728,730,732,734,736,738,740,742,744,746,748,750)
+
+psiT <-  c(0.0001,0.0001,0.0001,0.0001,0,0,0,0.0001,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.0001,0.0001,0.0001,0.0001,0.0001,0.0001,0.0001,0.0001,0.0001,0.0001,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.0001,0.0001,0.0001,0.0002,0.0003,0.0003,0.0004,0.0005,0.0006,0.0006,0.0007,0.0008,0.0009,0.001,0.001,0.001,0.001,0.001,0.0009,0.0009,0.0008,0.0007,0.0006,0.0006,0.0005,0.0004,0.0003,0.0003,0.0002,0.0001,0.0001,0,0,0,0,0,0,0,0,0,0.0001,0.0001,0.0001,0.0002,0.0002,0.0002,0.0001,0.0001,0.0001,0,0,-0.0001,-0.0001,-0.0001,-0.0001,-0.0001,-0.0001,0,0,0.0001,0.0002,0.0003,0.0005,0.0007,0.0009,0.0013,0.0017,0.0021,0.0026,0.0032,0.0038,0.0045,0.0054,0.0063,0.0073,0.0083,0.0094,0.0104,0.0113,0.0121,0.0128,0.0133,0.0136,0.0136,0.0133,0.0129,0.0124,0.0116,0.0107)
+
+wl <- as.numeric(wavelengths) %>% 
+  data_frame(.) %>% 
+  rename(psi_wl = ".") %>% 
+  mutate(psiT = NA) 
+
+temp <- data_frame(psi_wl, psiT) %>% 
+  bind_rows(., wl) %>% 
+  arrange(psi_wl) %>% 
+  distinct(., psi_wl, .keep_all = T) %>% 
+  zoo(., order.by = .$psi_wl) 
+  
+psiT_interp <-  as.numeric(na.approx(temp$psiT, na.rm = F)) 
+psi_wl_interp  <- temp$psi_wl
+interpolated_temp <- data.frame(psi_wl_interp, psiT_interp) %>% 
+  rownames_to_column() %>% 
+  rename(psi_wl = psi_wl_interp) %>% 
+  select(-rowname) %>% left_join(wl %>% select(psi_wl), .) %>% 
+  drop_na()
+  
+```
+
+```{r}
+to_correct <- combined %>%
+  rename(psi_wl = wl) %>% 
+  left_join(., interpolated_temp) 
+```
+
+
+
+```{r}
+# Find Near Infrared & references
+iNIR <- to_correct %>%  filter(between(psi_wl, 710, 750))  # spectral srange for optimization (710 to 750nm)
+
+#Find nearest wavelength to greater than 715 nm to use as reference for correction
+iref <- iNIR %>% filter(abs(psi_wl - 715) == min(abs(psi_wl - 715))) %>% 
+  select(ap, b, psiT_interp) %>% 
+  summarize_all(list(mean = mean))
+  
+```
+
+
+####cost function to find deltaT
+
+```{r}
+deltaT = 0
+
+cost_function <- function(iNIR, iref, deltaT) { sum(abs(iNIR$ap - iNIR$psiT_interp * deltaT - ((iref$ap_mean - iref$psiT_interp_mean * deltaT) / iref$b_mean * iNIR$b))) }
+
+optimize <- optim(fn = cost_function, iNIR = iNIR, iref = iref, par = deltaT, lower = 0, upper = 20000, method = "Brent") 
+
+deltaT <- optimize$value
+
+```
+
+
+```{r}
+corrected <- to_correct %>% 
+  mutate(deltaT = deltaT,
+         iref_ap = iref$ap_mean,
+         iref_psiT = iref$psiT_interp_mean,
+         iref_b = iref$b_mean,
+         
+         ap_corr = ap - psiT_interp * deltaT - (iref_ap - iref_psiT * deltaT) / iref_b * b, 
+         cp_corr = cp - psiT_interp * deltaT)
+```
+
+
+### plots
+
+```{r}
+corrected %>% 
+  mutate(interv = interval(first(hour), hour),
+         s = as.numeric(interv),
+         hours = s/3600) %>% 
+  filter(hours < 4) %>% 
+  # filter(dplyr::between(psi_wl, 600, 750)) %>%  
+  ggplot(aes(x = psi_wl, y = ap_corr, color = hours, group = hours)) +
+  geom_line(size = 1) +
+  labs(x = expression(paste("Wavelength, nm"^-1)), y = expression(paste("a"[p],", m"^-1)), color = "Hours") +
+  scale_color_viridis() +
+  theme_classic2(20) +
+  guides(color = guide_colourbar(barheight = 8, barwidth = 1, frame.colour = "black", frame.linewidth = 2,ticks.colour = "black", ticks.linewidth = 1, reverse = T)) 
+```
+
+
+
+```{r}
+corrected %>% 
+  mutate(interv = interval(first(hour), hour),
+         s = as.numeric(interv),
+         hours = s/3600) %>% 
+  ggplot(aes(x = psi_wl, y = cp_corr, color = hours, group = hours)) +
+  geom_line(size = 1) +
+  labs(x = expression(paste("Wavelength, nm"^-1)), y = expression(paste("c"[p],", m"^-1)), color = "Hours") +
+  scale_color_viridis() +
+  theme_classic2(20) +
+  guides(color = guide_colourbar(barheight = 8, barwidth = 1, frame.colour = "black", frame.linewidth = 2,ticks.colour = "black", ticks.linewidth = 1, reverse = T)) 
+```
+
+```{r}
+corrected %>% 
+  mutate(interv = interval(first(hour), hour),
+         s = as.numeric(interv),
+         hours = s/3600) %>% 
+  ggplot(aes(x = psi_wl, y = b, color = hours, group = hours)) +
+  geom_line(size = 1) +
+  labs(x = expression(paste("Wavelength, nm"^-1)), y = expression(paste("b"[p],", m"^-1)), color = "Hours") +
+  scale_color_viridis() +
+  theme_classic2(20) +
+  guides(color = guide_colourbar(barheight = 8, barwidth = 1, frame.colour = "black", frame.linewidth = 2,ticks.colour = "black", ticks.linewidth = 1, reverse = T)) 
+```
+
+
+
+```{r}
+# saveRDS(combined, file = "~/GITHUB/oceanoptics2021/data/acs_lab4/processed_acs_lab4.rds")
+```
+
+
+
+
+
+
+
+
+
+
+
+

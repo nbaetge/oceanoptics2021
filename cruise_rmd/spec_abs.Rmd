@@ -1,0 +1,91 @@
+---
+title: "spec_abs"
+author: "Nicholas Baetge"
+date: "8/4/2021"
+output: github_document
+---
+
+# Load Libraries
+
+```{r setup}
+library(tidyverse)
+library(readxl)
+library(ggpubr)
+library(fs)
+library(lubridate)
+library(zoo)
+library(patchwork)
+library(viridis)
+```
+
+
+# Import Data
+
+```{r}
+# save filenames that are in the folder of interest
+csv_files <- fs::dir_ls("~/GITHUB/oceanoptics2021/cruise_data/spec_abs/test/", regexp = "\\.csv$")
+```
+
+```{r}
+
+#store all data from all files one data frame (this is what the map_dfr function does). We'll add the filenames to the dataframe as well, in a column called "source. 
+data <- csv_files %>% 
+  map_dfr(read.csv, skip = 1, .id = "source") %>% 
+  rename(wl = "Wavelength..nm.") %>% 
+  select(-X) %>% 
+  mutate(source = gsub("/Users/nicholasbaetge/GITHUB/oceanoptics2021/cruise_data/spec_abs/test/", "", source),
+         source = gsub("_ap_G1.csv", "", source)) %>% 
+  #add some distinguisihing metadata about the filenames 
+  mutate(sample = ifelse(grepl("b",.$source), "Blank", NA),
+         sample = ifelse(grepl("zero", .$source), "Zero", sample),
+         sample = ifelse(grepl("HS", .$source), "HS", sample),
+         sample = ifelse(grepl("hs", .$source), "HS", sample),
+         type = ifelse(grepl("an", .$source), "NAP", "AP")) %>% 
+  select(source, sample, type, everything())
+```
+
+
+# Zero and Blanks
+
+```{r}
+data %>% 
+  filter(sample %in% c("Blank", "Zero")) %>% 
+  ggplot(aes(x = wl, y = Abs, color = sample, group = interaction(sample, source))) +
+  geom_line(size = 1) +
+  labs(x = expression(paste("Wavelength, nm"^-1)), y = expression(paste("Absorption, m"^-1)), color = "") +
+  scale_color_viridis_d() +
+  theme_classic2(20) 
+```
+
+
+# Compute absorption from absorbance
+
+```{r}
+vol = 500 #mls
+r = 1.1/2 # effective radius (cm2)
+H = vol / pi * r^2
+
+
+a <- data %>% 
+  group_by(sample, wl) %>%
+  mutate(blank_ave = ifelse(sample == "Blank", mean(Abs), NA)) %>% 
+  ungroup() %>% 
+  group_by(wl) %>% 
+  fill(blank_ave, .direction = "updown") %>% 
+  ungroup() %>% 
+  mutate(Abs_pad = 0.323 * Abs^1.0867) %>% #pathlength amplification correction
+  mutate(a = 2.303 * 100 * (Abs_pad/H)) # 100 is conv from cm to m 
+
+```
+
+
+```{r}
+a %>% 
+  drop_na(a) %>% 
+  filter(!sample %in% c("Blank", "Zero")) %>% 
+  ggplot(aes(x = wl, y = a, color = sample, group = interaction(sample, source), linetype = type)) +
+  geom_line(size = 1) +
+  labs(x = expression(paste("Wavelength, nm"^-1)), y = expression(paste("a, m"^-1))) +
+  scale_color_viridis_d() +
+  theme_classic2(20) 
+```
